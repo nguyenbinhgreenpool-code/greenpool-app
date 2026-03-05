@@ -1,0 +1,11 @@
+# Project Rules
+
+- **Ngôn ngữ giao tiếp**: AI PHẢI LUÔN LUÔN giao tiếp với người dùng bằng Tiếng Việt trong mọi tình huống, ngay cả khi người dùng sử dụng Tiếng Anh hay ngôn ngữ khác để đặt câu hỏi hoặc yêu cầu (prompt).
+
+# Bối cảnh dự án
+- Ứng dụng web quản lý phân bổ học viên bơi lội giữa Giáo viên và Sale.
+- Sử dụng thuật toán xoay vòng (Round-Robin) để tuần tự chia lượt nhận học viên.
+- **Dạng 1**: Giáo viên tự tuyển -> Không qua Sale, Giáo viên không bị mất lượt ở vòng xoay hiện tại.
+- **Dạng 2**: Học viên qua Sale -> Gán cho Giáo viên theo con trỏ hiện tại, sau đó Giáo viên đó BỊ MẤT LƯỢT (con trỏ lập tức dịch chuyển sang người tiếp theo trong danh sách).
+- **Stack**: HTML, CSS, JavaScript thuần (Vanilla). Lưu dữ liệu thông qua LocalStorage (MVP version).
+- **UI/UX**: Giao diện cần cực kỳ hiện đại, bắt mắt, có animation mượt mà, tối ưu hóa Mobile (Responsive). CSS Custom properties (Variables), hiệu ứng hover và transition.

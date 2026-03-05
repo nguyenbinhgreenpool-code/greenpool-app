@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "thang-long-swimming-club"
+  },
+  "targets": {
+    "thang-long-swimming-club": {
+      "hosting": {
+        "tlsc": [
+          "tlsc"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

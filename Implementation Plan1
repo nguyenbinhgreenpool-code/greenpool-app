@@ -1,0 +1,50 @@
+# Kế hoạch Triển khai App Quản lý Dạy Bơi
+
+Hệ thống sẽ là một nền tảng Web App ưu tiên giao diện di động (Mobile-first) phục vụ 3 nhóm người dùng: Quản trị viên (Admin), Nhân viên Sales, và Giáo viên.
+
+## 1. Mục tiêu kiến trúc (Architecture Goal)
+- **Frontend & Backend hợp nhất:** Xây dựng trên nền tảng Next.js (hoặc tương tự) giúp quản trị code dễ dàng với mô hình Client/Server.
+- **Styling:** Sử dụng Vanilla CSS với biến (CSS Variables) để thiết kế giao diện sang trọng, sạch sẽ, thao tác dễ dàng thông qua các thẻ (Cards) và danh sách (Lists).
+- **Database:** Relational Database (SQL - PostgreSQL) phù hợp nhất vì tính chất cần liên kết chặt chẽ thông tin Hợp đồng - Học viên - Lịch sử điểm danh và sự thay đổi tuần tự của Queue (Hàng đợi).
+
+## 2. Thiết kế Cơ sở dữ liệu Nội tại (Proposed Database Schema)
+
+1. **Facilities (Cơ sở)**
+   - `id`, `name`, `address`
+2. **Users (Người dùng)**
+   - `id`, `facilityId` (nơi công tác)
+   - `username`, `password`, `name`, `role` (ADMIN, SALE, TEACHER)
+   - `type` (OFFICIAL, COLLABORATOR) - Áp dụng cho Teacher.
+   - `gender` (M, F) - Để phục vụ xếp khách yêu cầu giới tính.
+   - `status` (ACTIVE, INACTIVE)
+3. **Queue (Bảng xếp hàng chia lượt)**
+   - Bảng này sẽ rất động, có thể lưu trữ trạng thái hàng đợi theo `facilityId`.
+   - Lưu trữ danh sách thứ tự GV hiện tại: `[Teacher_A, Teacher_B, Teacher_C...]`.
+   - Trạng thái vòng lặp: `currentRound`, biến lưu hệ số nhận (cao điểm/thấp điểm).
+4. **Students (Học viên)**
+   - `id`, `name`, `phone`, `gender`, `facilityId`
+   - `ageCategory` (ADULT, CHILD) - Phân loại người lớn / trẻ em.
+   - `type` (OFFICIAL, TEST)
+5. **Contracts (Hợp đồng)**
+   - `id`, `contractNumber` (Số hợp đồng riêng biệt), `studentId`, `teacherId` (đã nỗ lực chốt, hoặc đang học)
+   - `packageType` (Số lượng buổi)
+   - `status` (ACTIVE, COMPLETED, CANCELLED)
+6. **Attendances (Điểm danh / Tích buổi)**
+   - `id`, `contractId`, `date`, `teacherId`
+   - `curriculumType` (ECH, SAI)
+   - `step` (Tiến trình bài giảng)
+
+## 3. Luồng hoạt động cốt lõi
+
+**Luồng Phân chia (Sale):**
+1. Màn hình của Sale luôn fetch vị trí bảng chờ thời gian thực.
+2. Có khách mới -> Tạo hồ sơ khách (bao gồm: Họ và tên, Loại: Người lớn/Trẻ em, Số hợp đồng) -> Bấm nút "Bắt đầu phân bổ".
+3. Hệ thống hiển thị: "Đến lượt của GV [A]. Cấp cho GV [A]?" -> Có nút [Xác nhận] hoặc [Bỏ qua/Ngoại lệ].
+4. Bấm [Xác nhận] -> Trừ đi 1 lượt của GV [A] trong hàng đợi. Ghi nhận vào DB.
+5. Nếu bấm [Ngoại lệ], một modal hiện lên chọn nguyên nhân (Dính ca, Full lớp, Khách chọn Giới tính...). Database sẽ chạy Function/Procedure tương ứng để đảo thứ tự GV [A] theo đúng 7 quy tắc đề ra.
+
+**Luồng Tích buổi (Giáo viên):**
+1. GV mở app -> thấy danh sách học viên hiện tại của mình dưới dạng thẻ (Cards).
+2. Chọn học viên -> Mở chi tiết tiến trình.
+3. Bấm vào nút [Tích buổi hôm nay] -> Chọn loại giáo trình đang học (Ếch/Sải) -> Chọn tiến tới bước số mấy.
+4. Cập nhật số buổi còn lại trong Hợp đồng của Khách hàng, báo cáo ngược lại cho hệ thống quản trị.
