@@ -887,14 +887,7 @@ body.role-teacher .teacher-node .btn-danger {
     }
 }
 
-/* ===================== MANAGER READ-ONLY ===================== */
-body.role-manager #tab-admin .btn,
-body.role-manager #tab-admin button:not(#notif-bell-btn):not([onclick*="markAllNotifs"]),
-body.role-manager #tab-admin select,
-body.role-manager #tab-admin input,
-body.role-manager #tab-admin .admin-staff-actions {
-    display: none !important;
-}
+/* MANAGER READ-ONLY removed temporarily because manager has branch-admin rights */
 /* Pulse animation for active CLB session */
 @keyframes pulse {
     0% { opacity: 1; transform: scale(1); }

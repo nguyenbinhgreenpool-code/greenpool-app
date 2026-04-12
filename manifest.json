@@ -1,7 +1,7 @@
 {
     "name": "GreenPool TLSC",
     "short_name": "GreenPool",
-    "description": "Ứng dụng Quản lý Chia Học viên Bơi Lội",
+    "description": "Ứng dụng Quản Lý Học Viên Bơi Lặn",
     "start_url": "/index.html",
     "display": "standalone",
     "background_color": "#0f172a",

@@ -6,8 +6,6 @@ let currentUserId = null;
 let currentUserRole = null;
 let currentUserBranchId = null;
 let currentUserDisplayName = null;
-let isSuperAdmin = false;
-const SUPER_ADMIN_EMAIL = 'nguyenbinhgreenpool@gmail.com';
 let isLoginMode = true;
 
 let localState = {
@@ -29,7 +27,7 @@ let localState = {
 // Môn Lặn: danh sách curriculum và số buổi
 const DIVING_CURRICULUMS = {
     'Dolphin 1': 4,
-    'Dolphin 2': 5,
+    'Dolphin 2': 4,
     'Lặn Tiên cá': 4,
     'Trải nghiệm Tiên cá': 1
 };
@@ -894,7 +892,7 @@ function renderDashboard() {
 
         node.innerHTML = `
             <div class="t-name">${numLabel}${teacher.name}</div>
-            ${hasDebt ? `<div style="font-size:10px; color:#ef4444; font-weight:600; margin-top:2px;">Nợ ${slotDebt} vòng ${(currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') ? `<button onclick="event.stopPropagation(); clearTeacherDebt('${teacherId}','${teacher.name.replace(/'/g, "\\\\'")}')" style="font-size:9px; padding:1px 5px; border-radius:3px; border:1px solid rgba(59,130,246,0.4); background:rgba(59,130,246,0.1); color:#3b82f6; cursor:pointer; margin-left:4px;" title="Xóa nợ"><i class="fa-solid fa-eraser"></i></button>` : ''}</div>` : ''}
+            ${hasDebt ? `<div style="font-size:10px; color:#ef4444; font-weight:600; margin-top:2px;">Nợ ${slotDebt} vòng</div>` : ''}
             ${isTesting ? `<div style="font-size:10px; color:#f59e0b; font-weight:600; margin-top:2px;">🧪 Test (${remainingMin}p)</div>` : ''}
             ${(currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') ? `
             <button class="btn btn-sm btn-danger mt-10" onclick="cutQueueTurn()" style="margin-top:8px; width:100%; border-radius:4px; padding:4px;">
@@ -1383,8 +1381,6 @@ function renderTeacherStudents() {
         filtered = filtered.filter(s => s.source === 'Self');
     } else if (teacherFilterMode === 'test') {
         filtered = filtered.filter(s => s.isTestStudent === true);
-    } else if (teacherFilterMode === 'zero') {
-        filtered = filtered.filter(s => (s.sessions || 0) === 0);
     }
 
     // Lọc theo tên tìm kiếm
@@ -2038,14 +2034,6 @@ window.searchStudentForAttendance = async function (query) {
         });
     } catch (e) { console.warn('Recent att query:', e); }
 
-
-    // Build sale name lookup
-    const saleMap = {};
-    try {
-        const usersSnap = await db.collection('users').get();
-        usersSnap.forEach(doc => { saleMap[doc.id] = doc.data().name || doc.data().email || ''; });
-    } catch (e) { console.warn('Sale map error:', e); }
-
     container.innerHTML = results.map(st => {
         const total = st.totalSessions || 10;
         const percent = Math.min((st.sessions / total) * 100, 100);
@@ -2055,7 +2043,6 @@ window.searchStudentForAttendance = async function (query) {
         const recent = recentAttMap[st.id];
         const canCancel = !!recent;
         const cancelRemain = canCancel ? Math.max(0, Math.ceil((recent.time.getTime() + 20 * 60 * 1000 - now.getTime()) / 60000)) : 0;
-        const saleName = st.saleConfirmedBy || st.creatorName || (st.creatorId ? saleMap[st.creatorId] : '') || '';
 
         return `
         <div style="padding: 14px; background: var(--card-bg); border: 1px solid ${isDone ? 'rgba(239,68,68,0.2)' : 'var(--border-color)'}; border-radius: 10px;">
@@ -2075,8 +2062,8 @@ window.searchStudentForAttendance = async function (query) {
                         ${st.phone ? ` · <i class="fa-solid fa-phone"></i> ${st.phone}` : ''}
                         ${st.contractNumber ? ` · <i class="fa-solid fa-file-contract"></i> HĐ: ${st.contractNumber}` : ''}
                     </div>
-                    ${saleName ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
-                        <i class="fa-solid fa-user-tie"></i> Sale: <strong>${saleName}</strong>
+                    ${st.saleConfirmedBy || st.creatorName ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                        <i class="fa-solid fa-user-tie"></i> Sale: <strong>${st.saleConfirmedBy || st.creatorName || 'N/A'}</strong>
                     </div>` : ''}
                     <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
                         <div style="flex: 1; height: 6px; background: rgba(0,0,0,0.1); border-radius: 3px; overflow: hidden;">
@@ -2266,7 +2253,16 @@ window.markAttendance = async function (studentId, studentName, currentSessions,
     if (!confirm(`✅ Điểm danh: ${studentName}\n\nBuổi ${currentSessions + 1} / ${totalSessions}\nGiáo viên: ${teacherName}${expiryWarning}\n\nXác nhận?`)) return;
 
     try {
-        // Lưu log điểm danh TRƯỚC
+        // Tăng số buổi + lưu firstLessonDate nếu là buổi đầu
+        const updateData = {
+            sessions: firebase.firestore.FieldValue.increment(1)
+        };
+        if (currentSessions === 0) {
+            updateData.firstLessonDate = firebase.firestore.FieldValue.serverTimestamp();
+        }
+        await db.collection('students').doc(studentId).update(updateData);
+
+        // Lưu log điểm danh
         await db.collection('attendance').add({
             studentId: studentId,
             studentName: studentName,
@@ -2278,18 +2274,6 @@ window.markAttendance = async function (studentId, studentName, currentSessions,
             branchId: currentBranchId,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
-
-        // Đếm CHÍNH XÁC số bản ghi attendance → cập nhật sessions
-        const attCountSnap = await db.collection('attendance')
-            .where('studentId', '==', studentId)
-            .get();
-        const actualCount = attCountSnap.size;
-
-        const updateData = { sessions: actualCount };
-        if (currentSessions === 0) {
-            updateData.firstLessonDate = firebase.firestore.FieldValue.serverTimestamp();
-        }
-        await db.collection('students').doc(studentId).update(updateData);
 
         // Gửi thông báo cho GV xác nhận — kèm tên bể
         const branchName = FIXED_BRANCHES.find(b => b.id === currentBranchId)?.name || 'cơ sở';
@@ -2407,21 +2391,6 @@ window.renderLetanManageTable = async function () {
             studentMap[s.id].totalSessions = s.totalSessions || 10;
             studentMap[s.id].currentSessions = s.sessions || 0;
             studentMap[s.id].curriculum = s.curriculum || 'Bơi Ếch';
-            studentMap[s.id].contractNumber = s.contractNumber || '';
-            studentMap[s.id].saleName = s.saleConfirmedBy || s.creatorName || '';
-            studentMap[s.id].creatorId = s.creatorId || '';
-            studentMap[s.id].phone = s.phone || '';
-        });
-
-        // Build sale map from users for creatorId lookup
-        const saleMapLocal = {};
-        try {
-            const uSnap = await db.collection('users').get();
-            uSnap.forEach(doc => { saleMapLocal[doc.id] = doc.data().name || ''; });
-        } catch (e) { /* ignore */ }
-        // Fill missing saleName from creatorId
-        Object.values(studentMap).forEach(v => {
-            if (!v.saleName && v.creatorId) v.saleName = saleMapLocal[v.creatorId] || '';
         });
 
         let entries = Object.entries(studentMap);
@@ -2430,11 +2399,7 @@ window.renderLetanManageTable = async function () {
             v.logs.sort((a, b) => (b.time || 0) - (a.time || 0));
         });
         if (searchQ) {
-            entries = entries.filter(([, v]) => 
-                v.name.toLowerCase().includes(searchQ) || 
-                (v.contractNumber && v.contractNumber.toLowerCase().includes(searchQ)) ||
-                (v.phone && v.phone.includes(searchQ))
-            );
+            entries = entries.filter(([, v]) => v.name.toLowerCase().includes(searchQ));
         }
 
         if (entries.length === 0) {
@@ -2506,8 +2471,7 @@ window.renderLetanManageTable = async function () {
                             ${isDone ? '<span style="color:#ef4444; font-size:11px;">✅ Xong</span>' : ''}
                             ${isActive ? `<span style="font-size:10px; padding:2px 6px; border-radius:8px; background:rgba(6,182,212,0.15); color:#06b6d4; font-weight:700;">⏳ ${info.remainMin}p</span>` : ''}
                         </div>
-                        <div style="font-size:11px; color:var(--text-muted);">GV: ${info.teacherName} · ${info.curriculum || 'Bơi Ếch'}${info.contractNumber ? ` · HĐ: <strong>${info.contractNumber}</strong>` : ''}</div>
-                        ${info.saleName ? `<div style="font-size:11px; color:var(--text-muted);"><i class="fa-solid fa-user-tie" style="color:#f59e0b;"></i> Sale: <strong>${info.saleName}</strong></div>` : ''}
+                        <div style="font-size:11px; color:var(--text-muted);">GV: ${info.teacherName} · ${info.curriculum || 'Bơi Ếch'}</div>
                     </div>
                     <div style="display:flex; align-items:center; gap:8px;">
                         ${canCancel ? `<button onclick="event.stopPropagation(); cancelAttendance('${sid}', '${eName}', '${cancelDocId}', ${cur})"
@@ -2534,192 +2498,6 @@ window.renderLetanManageTable = async function () {
     } catch (e) {
         console.error('renderLetanManageTable error:', e);
         container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--danger);">Lỗi tải dữ liệu: ${e.message}</div>`;
-    }
-};
-
-// ===================== LỊCH SỬ ĐIỂM DANH HV THEO NGÀY (LỄ TÂN) =====================
-window.renderLetanHvHistory = async function (dateStr) {
-    const container = document.getElementById('letan-hv-history-result');
-    const countEl = document.getElementById('letan-hv-history-count');
-    if (!container) return;
-    if (!dateStr) {
-        container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;"><i class="fa-solid fa-calendar-days" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>Chọn ngày để xem lịch sử điểm danh HV</div>';
-        if (countEl) countEl.textContent = '';
-        return;
-    }
-
-    container.innerHTML = '<div style="text-align:center; padding:15px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Đang tải...</div>';
-
-    try {
-        const brId = currentBranchId;
-        const selectedDate = new Date(dateStr);
-        selectedDate.setHours(0, 0, 0, 0);
-        const nextDay = new Date(selectedDate);
-        nextDay.setDate(nextDay.getDate() + 1);
-
-        const snap = await db.collection('attendance')
-            .where('branchId', '==', brId)
-            .get();
-
-        const dayDocs = snap.docs.filter(doc => {
-            const ts = doc.data().createdAt?.toDate?.();
-            return ts && ts >= selectedDate && ts < nextDay;
-        }).sort((a, b) => {
-            const tA = a.data().createdAt?.toDate?.()?.getTime() || 0;
-            const tB = b.data().createdAt?.toDate?.()?.getTime() || 0;
-            return tB - tA;
-        });
-
-        const dateLabel = selectedDate.toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
-
-        if (dayDocs.length === 0) {
-            container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">
-                <i class="fa-solid fa-calendar-xmark" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>
-                Không có HV điểm danh ngày <b>${dateLabel}</b>
-            </div>`;
-            if (countEl) countEl.textContent = '';
-            return;
-        }
-
-        if (countEl) countEl.textContent = `${dayDocs.length} lượt`;
-
-        // Group by teacher
-        const byTeacher = {};
-        dayDocs.forEach(doc => {
-            const d = doc.data();
-            const tName = d.teacherName || 'Chưa gán';
-            if (!byTeacher[tName]) byTeacher[tName] = [];
-            byTeacher[tName].push(d);
-        });
-
-        const teacherColor = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
-
-        let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <span style="font-size:13px; font-weight:600; color:var(--text-color);">📅 ${dateLabel}</span>
-            <span style="font-size:12px; background:rgba(59,130,246,0.12); color:#3b82f6; padding:3px 10px; border-radius:8px; font-weight:700;">${dayDocs.length} HV</span>
-        </div>`;
-
-        let colorIdx = 0;
-        Object.keys(byTeacher).sort().forEach(tName => {
-            const students = byTeacher[tName];
-            const lc = teacherColor[colorIdx % teacherColor.length];
-            colorIdx++;
-            html += `<div style="margin-bottom:8px;">
-                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-                    <span style="background:${lc}; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700;">GV ${tName}</span>
-                    <span style="font-size:11px; color:var(--text-muted);">${students.length} HV</span>
-                </div>`;
-            students.forEach(d => {
-                const ts = d.createdAt?.toDate ? d.createdAt.toDate() : null;
-                const time = ts ? ts.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
-                html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; border-bottom:1px dashed var(--border-color); font-size:12px;">
-                    <span style="font-weight:500;">${d.studentName || 'HV'}</span>
-                    <div style="display:flex; gap:10px; align-items:center;">
-                        <span style="color:var(--text-muted);">Buổi <strong>${d.sessionNumber || '?'}</strong></span>
-                        <span style="color:var(--text-muted);"><i class="fa-solid fa-clock"></i> ${time}</span>
-                        <span style="font-size:10px; color:${lc};">${d.checkedByName || 'LT'}</span>
-                    </div>
-                </div>`;
-            });
-            html += `</div>`;
-        });
-
-        container.innerHTML = html;
-    } catch (e) {
-        console.error('renderLetanHvHistory error:', e);
-        container.innerHTML = '<div style="text-align:center; padding:15px; color:#ef4444;">Lỗi tải dữ liệu.</div>';
-    }
-};
-
-// ===================== LỊCH SỬ ĐIỂM DANH CLB THEO NGÀY (LỄ TÂN) =====================
-window.renderLetanClbHistory = async function (dateStr) {
-    const container = document.getElementById('letan-clb-history-result');
-    const countEl = document.getElementById('letan-clb-history-count');
-    if (!container) return;
-    if (!dateStr) {
-        container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;"><i class="fa-solid fa-calendar-days" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>Chọn ngày để xem lịch sử điểm danh CLB</div>';
-        if (countEl) countEl.textContent = '';
-        return;
-    }
-
-    container.innerHTML = '<div style="text-align:center; padding:15px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Đang tải...</div>';
-
-    try {
-        const brId = currentBranchId;
-        const selectedDate = new Date(dateStr);
-        selectedDate.setHours(0, 0, 0, 0);
-        const nextDay = new Date(selectedDate);
-        nextDay.setDate(nextDay.getDate() + 1);
-
-        const snap = await db.collection('clb_attendance')
-            .where('branchId', '==', brId)
-            .get();
-
-        const dayDocs = snap.docs.filter(doc => {
-            const ts = doc.data().timestamp?.toDate?.();
-            return ts && ts >= selectedDate && ts < nextDay;
-        }).sort((a, b) => {
-            const tA = a.data().timestamp?.toDate?.()?.getTime() || 0;
-            const tB = b.data().timestamp?.toDate?.()?.getTime() || 0;
-            return tB - tA;
-        });
-
-        const dateLabel = selectedDate.toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
-
-        if (dayDocs.length === 0) {
-            container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">
-                <i class="fa-solid fa-calendar-xmark" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>
-                Không có VĐV điểm danh ngày <b>${dateLabel}</b>
-            </div>`;
-            if (countEl) countEl.textContent = '';
-            return;
-        }
-
-        if (countEl) countEl.textContent = `${dayDocs.length} lượt`;
-
-        // Group by class
-        const byClass = {};
-        dayDocs.forEach(doc => {
-            const d = doc.data();
-            const cl = d.classLevel || '?';
-            if (!byClass[cl]) byClass[cl] = [];
-            byClass[cl].push(d);
-        });
-
-        const levelColor = { 'Mầm': '#ec4899', 'D1': '#3b82f6', 'D2': '#8b5cf6', 'C': '#f59e0b', 'B': '#ef4444', 'A': '#10b981' };
-
-        let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <span style="font-size:13px; font-weight:600; color:var(--text-color);">📅 ${dateLabel}</span>
-            <span style="font-size:12px; background:rgba(245,158,11,0.12); color:#f59e0b; padding:3px 10px; border-radius:8px; font-weight:700;">${dayDocs.length} VĐV</span>
-        </div>`;
-
-        Object.keys(byClass).sort().forEach(cl => {
-            const students = byClass[cl];
-            const lc = levelColor[cl] || '#6b7280';
-            html += `<div style="margin-bottom:8px;">
-                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-                    <span style="background:${lc}; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700;">Lớp ${cl}</span>
-                    <span style="font-size:11px; color:var(--text-muted);">${students.length} VĐV</span>
-                </div>`;
-            students.forEach(d => {
-                const ts = d.timestamp?.toDate ? d.timestamp.toDate() : null;
-                const time = ts ? ts.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
-                const confirmed = d.coachConfirmed ? `<span style="font-size:10px; color:#10b981;"><i class="fa-solid fa-circle-check"></i> ${d.coachConfirmedName || 'HLV'}</span>` : '<span style="font-size:10px; color:var(--text-muted);">Chưa XN</span>';
-                html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; border-bottom:1px dashed var(--border-color); font-size:12px;">
-                    <span style="font-weight:500;">${d.athleteName || 'VĐV'}</span>
-                    <div style="display:flex; gap:10px; align-items:center;">
-                        <span style="color:var(--text-muted);"><i class="fa-solid fa-clock"></i> ${time}</span>
-                        ${confirmed}
-                    </div>
-                </div>`;
-            });
-            html += `</div>`;
-        });
-
-        container.innerHTML = html;
-    } catch (e) {
-        console.error('renderLetanClbHistory error:', e);
-        container.innerHTML = '<div style="text-align:center; padding:15px; color:#ef4444;">Lỗi tải dữ liệu.</div>';
     }
 };
 
@@ -2926,11 +2704,6 @@ function renderSaleClbList() {
                 <span>📅 KH: ${activatedStr}</span>
                 <span>📅 HSD: ${expStr}</span>
             </div>
-            ${isExpired ? `<div style="margin-top:8px; display:flex; justify-content:flex-end;">
-                <button class="btn btn-sm" onclick="renewClbContract('${a.id}', '${(a.name || '').replace(/'/g, "\\\\'")}')" style="background:rgba(16,185,129,0.12); color:#059669; font-size:12px; padding:5px 12px; border:1px solid rgba(16,185,129,0.3); font-weight:600;">
-                    <i class="fa-solid fa-arrow-rotate-right"></i> Gia hạn HĐ
-                </button>
-            </div>` : ''}
         </div>`;
     });
     listBox.innerHTML = html;
@@ -2953,130 +2726,6 @@ window.setSaleClbFilter = function (mode) {
         }
     });
     renderSaleClbList();
-};
-
-// ===================== GIA HẠN HỢP ĐỒNG CLB ===================== //
-window.renewClbContract = async function (athleteId, athleteName) {
-    const athlete = _saleClbData.find(a => a.id === athleteId);
-    if (!athlete) return alert('Không tìm thấy VĐV!');
-
-    const oldContract = athlete.contractNumber || 'Chưa có';
-    const oldSessions = athlete.sessionsPerWeek || 3;
-    const oldMonths = athlete.contractMonths || 3;
-
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;';
-
-    const todayStr = new Date().toISOString().split('T')[0];
-    const iS = 'width:100%; padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px; margin-bottom:10px;';
-
-    overlay.innerHTML = `
-        <div style="background:var(--card-bg); border-radius:16px; padding:24px; width:100%; max-width:380px; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-            <h3 style="margin:0 0 4px; font-size:16px; color:var(--text-color);"><i class="fa-solid fa-rotate-right" style="color:#10b981;"></i> Gia Hạn HĐ CLB</h3>
-            <p style="margin:0 0 14px; font-size:13px; color:var(--text-muted);">VĐV: <strong>${athleteName}</strong></p>
-            
-            <label style="font-size:12px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:4px;">📋 Số hợp đồng mới:</label>
-            <input type="text" id="sale-renew-contract" value="" placeholder="Nhập số HĐ mới" style="${iS}">
-            
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                <div>
-                    <label style="font-size:12px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:4px;">📦 Số buổi/tuần:</label>
-                    <select id="sale-renew-sessions" style="${iS}">
-                        <option value="2" ${oldSessions == 2 ? 'selected' : ''}>2 buổi/tuần</option>
-                        <option value="3" ${oldSessions == 3 ? 'selected' : ''}>3 buổi/tuần</option>
-                        <option value="4" ${oldSessions == 4 ? 'selected' : ''}>4 buổi/tuần</option>
-                        <option value="5" ${oldSessions == 5 ? 'selected' : ''}>5 buổi/tuần</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:12px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:4px;">📅 Số tháng:</label>
-                    <select id="sale-renew-months" style="${iS}">
-                        <option value="1" ${oldMonths == 1 ? 'selected' : ''}>1 tháng</option>
-                        <option value="3" ${oldMonths == 3 ? 'selected' : ''}>3 tháng</option>
-                        <option value="6" ${oldMonths == 6 ? 'selected' : ''}>6 tháng</option>
-                        <option value="12" ${oldMonths == 12 ? 'selected' : ''}>12 tháng</option>
-                    </select>
-                </div>
-            </div>
-
-            <label style="font-size:12px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:4px;">📅 Ngày kích hoạt:</label>
-            <input type="date" id="sale-renew-activate" value="${todayStr}" style="${iS}">
-            
-            <div style="background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.15); border-radius:8px; padding:8px 10px; margin-bottom:14px; font-size:11px; color:var(--text-muted);">
-                <i class="fa-solid fa-circle-info" style="color:#f59e0b;"></i> HĐ cũ: <strong>${oldContract}</strong> · ${oldSessions}b/tuần × ${oldMonths} tháng<br>
-                <i class="fa-solid fa-shield-halved" style="color:#10b981;"></i> Lịch sử điểm danh cũ được <strong>giữ nguyên</strong>
-            </div>
-
-            <div style="display:flex; gap:10px; justify-content:flex-end;">
-                <button id="sale-renew-cancel" style="padding:8px 20px; border-radius:8px; border:1px solid var(--border-color); background:transparent; color:var(--text-muted); font-size:13px; cursor:pointer;">Huỷ</button>
-                <button id="sale-renew-confirm" style="padding:8px 20px; border-radius:8px; border:none; background:#10b981; color:#fff; font-size:13px; font-weight:600; cursor:pointer;">
-                    <i class="fa-solid fa-check"></i> Gia hạn
-                </button>
-            </div>
-        </div>`;
-
-    document.body.appendChild(overlay);
-    overlay.querySelector('#sale-renew-cancel').onclick = () => overlay.remove();
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-
-    overlay.querySelector('#sale-renew-confirm').onclick = async () => {
-        const newContract = (document.getElementById('sale-renew-contract')?.value || '').trim();
-        const newSessions = parseInt(document.getElementById('sale-renew-sessions')?.value) || 3;
-        const newMonths = parseInt(document.getElementById('sale-renew-months')?.value) || 3;
-        const activateVal = document.getElementById('sale-renew-activate')?.value;
-
-        if (!newContract) return alert('Vui lòng nhập số hợp đồng!');
-        if (!activateVal) return alert('Vui lòng chọn ngày kích hoạt!');
-
-        const newActivatedAt = new Date(activateVal);
-        // Tự tính HSD = ngày kích hoạt + số tháng
-        const newExpiresAt = new Date(newActivatedAt);
-        newExpiresAt.setMonth(newExpiresAt.getMonth() + newMonths);
-        newExpiresAt.setHours(23, 59, 59, 999);
-
-        try {
-            const brId = currentBranchId || currentUserBranchId;
-            const renewData = {
-                contractNumber: newContract,
-                sessionsPerWeek: newSessions,
-                contractMonths: newMonths,
-                activatedAt: firebase.firestore.Timestamp.fromDate(newActivatedAt),
-                expiresAt: firebase.firestore.Timestamp.fromDate(newExpiresAt),
-                expiryDate: firebase.firestore.Timestamp.fromDate(newExpiresAt),
-                isExpired: false,
-                isFrozen: false,
-                status: 'active',
-                renewedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                previousContractNumber: oldContract,
-                renewCount: firebase.firestore.FieldValue.increment(1)
-            };
-            const results = await Promise.allSettled([
-                db.collection('athletes').doc(athleteId).update(renewData),
-                db.collection('clb_athletes').doc(athleteId).update(renewData)
-            ]);
-            if (!results.some(r => r.status === 'fulfilled')) throw new Error('Không tìm thấy VĐV!');
-
-            // Sync lên Google Sheet
-            const branchObj = FIXED_BRANCHES.find(b => b.id === brId);
-            syncToGoogleSheet({
-                action: 'renewClb',
-                branchName: branchObj?.name || 'N/A',
-                name: athleteName,
-                oldContract: oldContract,
-                newContract: newContract,
-                activatedAt: newActivatedAt.toLocaleDateString('vi-VN'),
-                expiresAt: newExpiresAt.toLocaleDateString('vi-VN'),
-                package: `${newSessions}b/tuần × ${newMonths} tháng`
-            });
-
-            overlay.remove();
-            alert(`✅ Gia hạn thành công!\n\n"${athleteName}"\n📋 HĐ: ${newContract}\n📦 ${newSessions}b/tuần × ${newMonths} tháng\n📅 KH: ${newActivatedAt.toLocaleDateString('vi-VN')}\n📅 HSD: ${newExpiresAt.toLocaleDateString('vi-VN')}`);
-            loadSaleClbData();
-        } catch (e) {
-            console.error('Renew CLB contract error:', e);
-            alert('❌ Lỗi gia hạn: ' + e.message);
-        }
-    };
 };
 
 function renderSaleStats() {
@@ -3236,13 +2885,10 @@ function renderSaleStats() {
                     </div>
                     ${contractNum ? `<span style="font-size: 11px; color: #8b5cf6; font-weight: 600; white-space: nowrap; background: rgba(139,92,246,0.08); padding: 3px 8px; border-radius: 6px;">HĐ: ${contractNum}</span>` : ''}
                 </div>
-                <div style="margin-top: 6px; display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap;">
+                <div style="margin-top: 6px; display: flex; justify-content: flex-end;">
                     <button class="btn btn-sm" onclick="editStudentInfo('${st.id}')" style="background: rgba(37,99,235,0.1); color: var(--primary); font-size: 11px; padding: 4px 10px; border: 1px solid rgba(37,99,235,0.25);">
                         <i class="fa-solid fa-pen-to-square"></i> Bổ sung TT
                     </button>
-                    ${isDone ? `<button class="btn btn-sm" onclick="renewSaleContract('${st.id}', '${st.name.replace(/'/g, "\\\\'")}')" style="background:rgba(16,185,129,0.12); color:#059669; font-size:11px; padding:4px 10px; border:1px solid rgba(16,185,129,0.3); font-weight:600;">
-                        <i class="fa-solid fa-arrow-rotate-right"></i> Gia hạn HĐ
-                    </button>` : ''}
                 </div>
             </div>
         `;
@@ -3250,117 +2896,12 @@ function renderSaleStats() {
     listBox.innerHTML = html;
 }
 
-// ===================== GIA HẠN HỢP ĐỒNG HV CƠ BẢN ===================== //
-window.renewSaleContract = async function (studentId, studentName) {
-    const st = localState.students.find(s => s.id === studentId);
-    if (!st) return alert('Không tìm thấy học viên!');
-
-    const currentSessions = st.sessions || 0;
-    const currentTotal = st.totalSessions || 10;
-    const oldContract = st.contractNumber || 'Chưa có';
-
-    // Bước 1: Nhập số HĐ mới
-    const newContract = prompt(
-        `🔄 GIA HẠN HỢP ĐỒNG\n\n` +
-        `👤 HV: ${studentName}\n` +
-        `📋 HĐ cũ: ${oldContract}\n` +
-        `📊 Đã học: ${currentSessions}/${currentTotal} buổi\n\n` +
-        `Nhập SỐ HỢP ĐỒNG MỚI:`
-    );
-    if (!newContract || !newContract.trim()) return;
-
-    // Bước 2: Chọn kiểu bơi (có thể đổi)
-    const curTypes = ['Bơi Ếch', 'Bơi Sải', 'Ếch Vip', 'Sải Vip', 'Bơi Ngửa', 'Bơi Bướm', 'PT'];
-    const newCurriculum = prompt(
-        `🏊 Kiểu bơi hiện tại: ${st.curriculum || 'Bơi Ếch'}\n\n` +
-        `Chọn kiểu bơi cho gói mới:\n${curTypes.join(' / ')}\n\n` +
-        `(Bỏ trống = giữ nguyên):`,
-        st.curriculum || 'Bơi Ếch'
-    );
-    if (newCurriculum === null) return;
-    const finalCurriculum = (newCurriculum.trim() && curTypes.includes(newCurriculum.trim())) ? newCurriculum.trim() : (st.curriculum || 'Bơi Ếch');
-
-    // Tính số buổi thêm
-    let addSessions;
-    if (finalCurriculum === 'Ếch Vip' || finalCurriculum === 'Sải Vip') {
-        addSessions = 15;
-    } else if (finalCurriculum === 'PT') {
-        const ptStr = prompt('Nhập số buổi PT cần thêm:', '10');
-        if (!ptStr) return;
-        addSessions = parseInt(ptStr) || 10;
-    } else {
-        addSessions = 10;
-    }
-
-    const newTotal = currentTotal + addSessions;
-
-    // Xác nhận
-    if (!confirm(
-        `✅ XÁC NHẬN GIA HẠN\n\n` +
-        `👤 ${studentName}\n` +
-        `📋 HĐ: ${oldContract} → ${newContract.trim()}\n` +
-        `🏊 Kiểu bơi: ${finalCurriculum}\n` +
-        `📊 Buổi: ${currentSessions}/${currentTotal} → ${currentSessions}/${newTotal} (+${addSessions} buổi)\n\n` +
-        `⚠️ Giữ nguyên số buổi đã học & lịch sử điểm danh.`
-    )) return;
-
-    try {
-        await db.collection('students').doc(studentId).update({
-            contractNumber: newContract.trim(),
-            totalSessions: newTotal,
-            curriculum: finalCurriculum,
-            renewedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            previousContractNumber: oldContract,
-            previousTotalSessions: currentTotal,
-            salaryConfirmed: false,
-            saleConfirmed: false,
-            salarySubmittedMonth: '',
-            isUpgrade: true
-        });
-
-        // Sync lên Google Sheet
-        const branchObj = FIXED_BRANCHES.find(b => b.id === (st.branchId || currentBranchId));
-        const teacherObj = localState.teachers.find(t => t.id === st.assignedTeacherId);
-        syncToGoogleSheet({
-            action: 'addRow',
-            branchName: branchObj?.name || 'N/A',
-            stt: '',
-            syncTime: new Date().toLocaleString('vi-VN'),
-            createdAt: new Date().toLocaleDateString('vi-VN'),
-            name: studentName,
-            contractNumber: newContract.trim(),
-            phone: st.phone || '',
-            curriculum: finalCurriculum,
-            ageCategory: st.ageCategory || '',
-            teacherName: teacherObj?.name || 'N/A',
-            saleName: currentUserDisplayName || 'Sale',
-            sessions: newTotal
-        });
-
-        // Thông báo cho GV
-        if (st.assignedTeacherId) {
-            sendNotification(st.assignedTeacherId, 'contract',
-                `🔄 Gia hạn HĐ: "${studentName}" (HĐ mới: ${newContract.trim()}, ${finalCurriculum}). Thêm ${addSessions} buổi → ${currentSessions}/${newTotal}.`
-            );
-        }
-
-        alert(`✅ Gia hạn thành công!\n\n"${studentName}" — HĐ: ${newContract.trim()}\nBuổi: ${currentSessions}/${newTotal}`);
-    } catch (e) {
-        console.error('Renew sale contract error:', e);
-        alert('❌ Lỗi: ' + e.message);
-    }
-};
-
 // Cập nhật giao diện toàn diện
-let _uiTimer = null;
 function updateAllUI() {
-    clearTimeout(_uiTimer);
-    _uiTimer = setTimeout(() => {
-        updateTeacherSelects();
-        renderDashboard();
-        renderTeacherStudents();
-        renderSaleStats();
-    }, 300);
+    updateTeacherSelects();
+    renderDashboard();
+    renderTeacherStudents();
+    renderSaleStats();
 }
 
 // ===================== REALTIME FIREBASE LISTENERS ===================== //
@@ -3604,7 +3145,6 @@ function getNextActiveIndex(fixedOrder, currentIdx, debtMap, teachers) {
     const updatedDebt = { ...debtMap };
 
     // Bước 1: Tìm slot THỰC SỰ nhận HV (bỏ qua debt + paused từ currentIdx)
-    // Chỉ ở bước này nợ mới được tiêu — vì slot này ĐÚNG PHIÊN nhưng bị nợ nên mất lượt
     let actualReceiver = currentIdx;
     for (let i = 0; i < len; i++) {
         const tid = fixedOrder[actualReceiver];
@@ -3624,21 +3164,25 @@ function getNextActiveIndex(fixedOrder, currentIdx, debtMap, teachers) {
         break; // Đây là slot thực sự nhận HV
     }
 
-    // Bước 2: Tìm slot TIẾP THEO sau slot nhận để đặt con trỏ
-    // KHÔNG tiêu nợ ở đây — nợ chỉ bị tiêu khi slot đó ĐẾN LƯỢT nhận HĐ (Bước 1 lần sau)
+    // Bước 2: Tìm slot TIẾP THEO sau slot nhận (advance)
     let checked = 0;
     let idx = (actualReceiver + 1) % len;
     while (checked < len) {
         const tid = fixedOrder[idx];
         const teacher = teachers.find(t => t.id === tid);
         if (!teacher || teacher.queuePaused) {
-            // GV paused hoặc không tồn tại → bỏ qua hoàn toàn
             idx = (idx + 1) % len;
             checked++;
             continue;
         }
-        // Slot active (kể cả có nợ) → đây là slot tiếp theo
-        // Nợ sẽ được xử lý khi slot này đến lượt nhận HĐ (Bước 1)
+        const slotKey = 's' + idx;
+        if ((updatedDebt[slotKey] || 0) > 0) {
+            updatedDebt[slotKey]--;
+            if (updatedDebt[slotKey] <= 0) delete updatedDebt[slotKey];
+            idx = (idx + 1) % len;
+            checked++;
+            continue;
+        }
         return { nextIndex: idx, updatedDebt };
     }
     return { nextIndex: (actualReceiver + 1) % len, updatedDebt };
@@ -4863,7 +4407,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window._isRegistering) return;
         if (user) {
             currentUserId = user.uid;
-            isSuperAdmin = (user.email === SUPER_ADMIN_EMAIL);
             // Fetch role
             try {
                 const userDoc = await db.collection('users').doc(user.uid).get();
@@ -5326,7 +4869,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             </optgroup>
                             <optgroup label="🤿 Lặn">
                                 <option value="Dolphin 1">🤿 Dolphin 1 (4 buổi)</option>
-                                <option value="Dolphin 2">🤿 Dolphin 2 (5 buổi)</option>
+                                <option value="Dolphin 2">🤿 Dolphin 2 (4 buổi)</option>
                                 <option value="Lặn Tiên cá">🧜 Lặn Tiên cá (4 buổi)</option>
                                 <option value="Trải nghiệm Tiên cá">🧜 Trải nghiệm Tiên cá (1 buổi)</option>
                             </optgroup>
@@ -5851,7 +5394,6 @@ function renderSettingsBranchList() {
 
 // Admin tạm dừng / kích hoạt cơ sở
 window.toggleBranchPause = async function (branchId, pause) {
-    if (currentUserRole === 'ADMIN' && !isSuperAdmin) return alert('⚠️ Chỉ Admin chính mới có quyền thay đổi trạng thái cơ sở!');
     const branch = FIXED_BRANCHES.find(b => b.id === branchId);
     if (!branch) return;
     const action = pause ? 'TẠM DỪNG' : 'KÍCH HOẠT LẠI';
@@ -6109,7 +5651,7 @@ window.forgotPassword = function () {
 
 // Admin đổi mật khẩu user
 window.adminResetUserPassword = async function () {
-    if (!isSuperAdmin) return alert('⚠️ Chỉ Admin chính mới có quyền đổi mật khẩu người dùng!');
+    if (currentUserRole !== 'ADMIN') return alert('⚠️ Chỉ Admin được đổi mật khẩu!');
     const email = prompt('📧 Nhập email tài khoản cần đổi mật khẩu:');
     if (!email) return;
     const newPassword = prompt(`🔑 Nhập mật khẩu mới cho ${email}:\n(Tối thiểu 6 ký tự)`);
@@ -6130,37 +5672,20 @@ window.adminResetUserPassword = async function () {
 // ===================== CAM KẾT MIỄN TRỪ TRÁCH NHIỆM (WAIVER) ===================== //
 
 const WAIVER_CONTENT = `
-<h3 style="text-align:center; color:#0891b2; margin:0 0 6px; font-size:15px;">BẢN CAM KẾT CHẤP NHẬN RỦI RO<br>VÀ XÁC NHẬN QUYỀN HÌNH ẢNH</h3>
-<p style="text-align:center; font-size:12px; color:var(--text-muted); margin-bottom:16px;">(Dành cho Học viên tham gia hoạt động tại CLB Lặn Thăng Long)</p>
+<h3 style="text-align:center; color:#0891b2; margin:0 0 12px;">🤿 CAM KẾT MIỄN TRỪ TRÁCH NHIỆM</h3>
+<p style="text-align:center; font-size:12px; color:var(--text-muted); margin-bottom:16px;">Chương trình Lặn - Trung tâm Bơi Thăng Long</p>
 <div style="font-size:13px; line-height:1.7; color:var(--text-color);">
-<h4 style="color:#0891b2; margin:14px 0 8px;">I. CAM KẾT VỀ SỨC KHỎE VÀ QUẢN LÝ RỦI RO</h4>
-<p><strong>1. Nhận thức rủi ro:</strong> Tôi hiểu rằng lặn (bao gồm lặn tự do và lặn khí tài) là môn thể thao tiềm ẩn rủi ro đặc thù như: chấn thương áp suất tai/phổi, ngất xỉu do thiếu oxy (blackout), hoặc các tai nạn dưới nước khác. Tôi tự nguyện chấp nhận các rủi ro này.</p>
-<p><strong>2. Tình trạng sức khỏe:</strong> Tôi xác nhận mình không có tiền sử bệnh tim mạch, hô hấp nghiêm trọng, động kinh hoặc các bệnh lý khác mà bác sĩ khuyến cáo không được lặn. Tôi cam kết không sử dụng rượu bia hoặc chất kích thích trước và trong khi tham gia buổi học.</p>
-<p><strong>3. Tuân thủ an toàn:</strong> Tôi cam kết tuân thủ tuyệt đối các quy tắc an toàn và hướng dẫn của Huấn luyện viên. Tôi hiểu rằng bất kỳ hành vi vi phạm kỷ luật nào gây nguy hiểm cho bản thân và người khác sẽ dẫn đến việc đình chỉ hoạt động ngay lập tức.</p>
-<p><strong>4. Miễn trừ trách nhiệm:</strong> Tôi và người đại diện hợp pháp của tôi đồng ý miễn trừ toàn bộ trách nhiệm pháp lý đối với CLB Lặn Thăng Long và đội ngũ huấn luyện viên trong trường hợp xảy ra sự cố, thương tích hoặc mất mát tài sản cá nhân phát sinh từ việc tham gia hoạt động, trừ trường hợp lỗi cố ý từ phía câu lạc bộ.</p>
-
-<h4 style="color:#0891b2; margin:14px 0 8px;">II. PHÓ THÁC VÀ CHO PHÉP SỬ DỤNG HÌNH ẢNH</h4>
-<p><strong>1. Ghi hình:</strong> Tôi đồng ý cho phép CLB Lặn Thăng Long ghi hình, chụp ảnh và ghi âm trong suốt quá trình tôi tham gia các buổi học (dưới nước và trên cạn).</p>
-<p><strong>2. Mục đích sử dụng:</strong> Tôi chấp thuận để câu lạc bộ sử dụng các tư liệu hình ảnh/video có mặt tôi vào các mục đích:</p>
-<ul style="margin:4px 0 8px 16px;">
-<li>Phân tích kỹ thuật để cải thiện kỹ năng cho cá nhân tôi và học viên khác.</li>
-<li>Làm tư liệu giảng dạy và đào tạo.</li>
-<li>Truyền thông và quảng bá trên các nền tảng mạng xã hội (Facebook, TikTok, YouTube, Website...) của câu lạc bộ.</li>
-</ul>
-<p><strong>3. Quyền sở hữu:</strong> Tôi xác nhận các hình ảnh và video này thuộc bản quyền của câu lạc bộ. Tôi từ bỏ quyền yêu cầu thù lao hoặc kiểm duyệt hình ảnh trước khi đăng tải, miễn là các hình ảnh đó không vi phạm thuần phong mỹ tục hoặc làm tổn hại đến danh dự cá nhân.</p>
-
-<h4 style="color:#0891b2; margin:14px 0 8px;">III. ĐỐI VỚI TRẺ EM (DƯỚI 18 TUỔI)</h4>
-<p>Nếu người tham gia là trẻ em, phụ huynh/người giám hộ ký cam kết này thay mặt và chịu trách nhiệm hoàn toàn.</p>
-<p><strong>Tôi đã đọc, hiểu rõ và hoàn toàn đồng ý với tất cả các nội dung nêu trên.</strong></p>
+<p>Tôi, người ký tên dưới đây, xác nhận và đồng ý với các điều khoản sau:</p>
+<p><strong>1. Nhận thức rủi ro:</strong> Tôi hiểu rằng hoạt động lặn (bao gồm Dolphin, Lặn Tiên cá) là môn thể thao dưới nước có yếu tố rủi ro cao hơn các hoạt động bơi lội thông thường, bao gồm nhưng không giới hạn: nguy cơ đuối nước, chấn thương, tai nạn trong môi trường nước sâu.</p>
+<p><strong>2. Tình trạng sức khỏe:</strong> Tôi cam kết rằng bản thân (hoặc người được đại diện) đủ sức khỏe để tham gia hoạt động lặn. Tôi không mắc các bệnh lý tim mạch, hô hấp, động kinh, hoặc các bệnh lý khác có thể gây nguy hiểm khi hoạt động dưới nước. Nếu có bất kỳ vấn đề sức khỏe nào, tôi đã thông báo cho Trung tâm trước khi đăng ký.</p>
+<p><strong>3. Tuân thủ hướng dẫn:</strong> Tôi cam kết tuân thủ mọi hướng dẫn, quy định an toàn của Giáo viên và Trung tâm trong suốt quá trình học lặn. Tôi sẽ không tự ý thực hiện các hoạt động lặn ngoài sự giám sát của Giáo viên.</p>
+<p><strong>4. Miễn trừ trách nhiệm:</strong> Tôi tự nguyện miễn trừ Trung tâm Bơi Thăng Long, Giáo viên, và các nhân viên liên quan khỏi mọi trách nhiệm pháp lý đối với các chấn thương, thiệt hại, hoặc tổn thất phát sinh trong quá trình tham gia hoạt động lặn, trừ trường hợp do lỗi cố ý hoặc sơ suất nghiêm trọng của Trung tâm.</p>
+<p><strong>5. Đối với trẻ em (dưới 18 tuổi):</strong> Nếu người tham gia là trẻ em, phụ huynh/người giám hộ ký cam kết này thay mặt và chịu trách nhiệm hoàn toàn.</p>
+<p><strong>6. Xác nhận:</strong> Tôi đã đọc, hiểu rõ và tự nguyện ký vào bản cam kết này.</p>
 </div>`;
 
 // Mở form ký waiver
 window.openWaiverForm = function (studentId, studentName) {
-    // Lấy thông tin HV
-    const st = localState.students.find(s => s.id === studentId);
-    const phone = st?.phone || '';
-    const cccd = st?.cccd || '';
-
     let overlay = document.getElementById('waiver-overlay');
     if (overlay) overlay.remove();
     overlay = document.createElement('div');
@@ -6168,51 +5693,14 @@ window.openWaiverForm = function (studentId, studentName) {
     overlay.style.cssText = 'position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:9999; display:flex; align-items:center; justify-content:center; padding:12px;';
 
     overlay.innerHTML = `
-    <div style="background:var(--card-bg); border-radius:16px; padding:20px; max-width:520px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+    <div style="background:var(--card-bg); border-radius:16px; padding:20px; max-width:500px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.4);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <span style="font-weight:700; font-size:15px; color:var(--text-color);">🤿 Cam kết cho: <span style="color:#0891b2;">${studentName}</span></span>
+            <span style="font-weight:700; font-size:15px; color:var(--text-color);">📋 Cam kết cho: <span style="color:#0891b2;">${studentName}</span></span>
             <button onclick="document.getElementById('waiver-overlay').remove()" style="border:none; background:none; font-size:20px; cursor:pointer; color:var(--text-muted);">✕</button>
         </div>
-
-        <!-- Thông tin cá nhân -->
-        <div style="background:rgba(8,145,178,0.06); border:1px solid rgba(8,145,178,0.15); border-radius:10px; padding:12px; margin-bottom:12px;">
-            <div style="font-size:12px; font-weight:600; color:#0891b2; margin-bottom:8px;">📋 Thông tin cá nhân</div>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-                <div>
-                    <label style="font-size:11px; color:var(--text-muted);">Họ và tên</label>
-                    <input id="waiver-fullname" value="${studentName}" style="width:100%; padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:13px; background:var(--card-bg); color:var(--text-color);" readonly>
-                </div>
-                <div>
-                    <label style="font-size:11px; color:var(--text-muted);">SĐT</label>
-                    <input id="waiver-phone" value="${phone}" style="width:100%; padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:13px; background:var(--card-bg); color:var(--text-color);" readonly>
-                </div>
-                <div>
-                    <label style="font-size:11px; color:var(--text-muted);">Ngày sinh</label>
-                    <input id="waiver-dob" type="date" style="width:100%; padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:13px; background:var(--card-bg); color:var(--text-color);">
-                </div>
-                <div>
-                    <label style="font-size:11px; color:var(--text-muted);">CMND/CCCD</label>
-                    <input id="waiver-cccd" value="${cccd}" placeholder="Nhập CCCD..." style="width:100%; padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:13px; background:var(--card-bg); color:var(--text-color);">
-                </div>
-            </div>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
-                <div>
-                    <label style="font-size:11px; color:var(--text-muted);">👤 Người liên hệ khẩn cấp <span style="color:#ef4444;">*</span></label>
-                    <input id="waiver-emergency-name" placeholder="Họ tên..." style="width:100%; padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:13px; background:var(--card-bg); color:var(--text-color);">
-                </div>
-                <div>
-                    <label style="font-size:11px; color:var(--text-muted);">📞 SĐT khẩn cấp <span style="color:#ef4444;">*</span></label>
-                    <input id="waiver-emergency-phone" placeholder="0xxx..." style="width:100%; padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:13px; background:var(--card-bg); color:var(--text-color);">
-                </div>
-            </div>
-        </div>
-
-        <!-- Nội dung cam kết -->
-        <div style="max-height:250px; overflow-y:auto; border:1px solid var(--border-color); border-radius:10px; padding:14px; margin-bottom:12px; background:rgba(0,0,0,0.02); font-size:12px;">
+        <div style="max-height:300px; overflow-y:auto; border:1px solid var(--border-color); border-radius:10px; padding:16px; margin-bottom:16px; background:rgba(0,0,0,0.02);">
             ${WAIVER_CONTENT}
         </div>
-
-        <!-- Chữ ký -->
         <div style="margin-bottom:12px;">
             <div style="font-size:13px; font-weight:600; color:var(--text-color); margin-bottom:8px;">✍️ Chữ ký của bạn:</div>
             <canvas id="waiver-canvas" width="460" height="150" style="width:100%; height:150px; border:2px dashed var(--border-color); border-radius:10px; background:#fff; cursor:crosshair; touch-action:none;"></canvas>
@@ -6220,16 +5708,12 @@ window.openWaiverForm = function (studentId, studentName) {
                 <button onclick="clearWaiverCanvas()" style="font-size:11px; border:none; background:none; color:#ef4444; cursor:pointer; text-decoration:underline;">Xóa chữ ký</button>
             </div>
         </div>
-
-        <!-- Checkbox đồng ý -->
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px;">
             <input type="checkbox" id="waiver-agree" style="width:18px; height:18px; cursor:pointer; accent-color:#0891b2;">
             <label for="waiver-agree" style="font-size:13px; color:var(--text-color); cursor:pointer; font-weight:500;">
-                Tôi đã đọc, hiểu rõ và hoàn toàn đồng ý với tất cả các nội dung nêu trên
+                Tôi đã đọc, hiểu rõ và đồng ý với các điều khoản trên
             </label>
         </div>
-
-        <!-- Nút submit -->
         <button id="waiver-submit-btn" onclick="submitWaiver('${studentId}', '${studentName.replace(/'/g, "\\\\'")}')"
             style="width:100%; padding:12px; border-radius:10px; border:none; background:#0891b2; color:#fff; font-weight:700; font-size:14px; cursor:pointer; opacity:0.5;" disabled>
             🤿 Ký xác nhận cam kết
@@ -6299,27 +5783,17 @@ window.submitWaiver = async function (studentId, studentName) {
     if (!cb || !cb.checked) return alert('⚠️ Bạn cần đồng ý các điều khoản!');
     if (!_waiverHasDrawn) return alert('⚠️ Vui lòng ký chữ ký trước khi gửi!');
 
-    const emergencyName = document.getElementById('waiver-emergency-name')?.value?.trim();
-    const emergencyPhone = document.getElementById('waiver-emergency-phone')?.value?.trim();
-    if (!emergencyName || !emergencyPhone) return alert('⚠️ Vui lòng nhập đầy đủ thông tin người liên hệ khẩn cấp!');
-
     const canvas = document.getElementById('waiver-canvas');
     const signatureData = canvas.toDataURL('image/png');
-    const dob = document.getElementById('waiver-dob')?.value || '';
-    const cccd = document.getElementById('waiver-cccd')?.value?.trim() || '';
 
     try {
         await db.collection('students').doc(studentId).update({
             waiverSigned: true,
             waiverSignedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            waiverSignature: signatureData,
-            emergencyContactName: emergencyName,
-            emergencyContactPhone: emergencyPhone,
-            dateOfBirth: dob,
-            cccd: cccd
+            waiverSignature: signatureData
         });
 
-        alert(`✅ Đã ký cam kết thành công!\n\nHV "${studentName}" giờ có thể tham gia lớp Lặn.`);
+        alert(`✅ Đã ký cam kết miễn trừ trách nhiệm thành công!\n\nHV "${studentName}" giờ có thể tham gia lớp Lặn.`);
         document.getElementById('waiver-overlay')?.remove();
 
         // Reload kết quả tìm kiếm
@@ -6348,7 +5822,7 @@ window.viewSignedWaiver = async function (studentId, studentName) {
         overlay.style.cssText = 'position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:9999; display:flex; align-items:center; justify-content:center; padding:12px;';
 
         overlay.innerHTML = `
-        <div style="background:var(--card-bg); border-radius:16px; padding:20px; max-width:520px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+        <div style="background:var(--card-bg); border-radius:16px; padding:20px; max-width:500px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.4);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                 <span style="font-weight:700; font-size:15px; color:var(--text-color);">📋 Cam kết đã ký — <span style="color:#0891b2;">${studentName}</span></span>
                 <button onclick="document.getElementById('waiver-view-overlay').remove()" style="border:none; background:none; font-size:20px; cursor:pointer; color:var(--text-muted);">✕</button>
@@ -6356,116 +5830,19 @@ window.viewSignedWaiver = async function (studentId, studentName) {
             <div style="padding:8px 12px; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.2); border-radius:8px; margin-bottom:12px; font-size:12px; color:#059669; font-weight:600;">
                 ✅ Đã ký lúc: ${signedDate}
             </div>
-            <!-- Thông tin cá nhân -->
-            <div style="background:rgba(8,145,178,0.06); border:1px solid rgba(8,145,178,0.15); border-radius:8px; padding:10px; margin-bottom:12px; font-size:12px;">
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-                    ${data.dateOfBirth ? `<div>📅 Ngày sinh: <strong>${data.dateOfBirth}</strong></div>` : ''}
-                    ${data.cccd ? `<div>🪪 CCCD: <strong>${data.cccd}</strong></div>` : ''}
-                    ${data.emergencyContactName ? `<div>👤 LH khẩn cấp: <strong>${data.emergencyContactName}</strong></div>` : ''}
-                    ${data.emergencyContactPhone ? `<div>📞 SĐT KC: <strong>${data.emergencyContactPhone}</strong></div>` : ''}
-                </div>
-            </div>
-            <div style="max-height:200px; overflow-y:auto; border:1px solid var(--border-color); border-radius:10px; padding:14px; margin-bottom:12px; background:rgba(0,0,0,0.02); font-size:11px;">
+            <div style="max-height:250px; overflow-y:auto; border:1px solid var(--border-color); border-radius:10px; padding:14px; margin-bottom:16px; background:rgba(0,0,0,0.02); font-size:12px;">
                 ${WAIVER_CONTENT}
             </div>
-            <div style="border:1px solid var(--border-color); border-radius:10px; padding:12px; background:#fff; margin-bottom:12px;">
+            <div style="border:1px solid var(--border-color); border-radius:10px; padding:12px; background:#fff;">
                 <div style="font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:8px;">✍️ Chữ ký:</div>
                 ${signatureImg ? `<img src="${signatureImg}" style="width:100%; max-height:150px; object-fit:contain; border-radius:6px;" alt="Chữ ký">` : '<div style="text-align:center; color:var(--text-muted); padding:20px;">Không có dữ liệu chữ ký</div>'}
             </div>
-            <button onclick="exportWaiverPDF('${studentId}', '${studentName.replace(/'/g, "\\\\'")}')"
-                style="width:100%; padding:10px; border-radius:10px; border:none; background:#2563eb; color:#fff; font-weight:600; font-size:13px; cursor:pointer;">
-                📄 Xuất file in / lưu
-            </button>
         </div>`;
 
         document.body.appendChild(overlay);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     } catch (e) {
         alert('Lỗi: ' + e.message);
-    }
-};
-
-// Xuất bản cam kết ra trang in (PDF)
-window.exportWaiverPDF = async function (studentId, studentName) {
-    try {
-        const docSnap = await db.collection('students').doc(studentId).get();
-        if (!docSnap.exists) return alert('Không tìm thấy HV!');
-        const d = docSnap.data();
-        const signedDate = d.waiverSignedAt?.toDate ? d.waiverSignedAt.toDate().toLocaleDateString('vi-VN') : '';
-        const signedDateObj = d.waiverSignedAt?.toDate ? d.waiverSignedAt.toDate() : new Date();
-
-        const printWin = window.open('', '_blank');
-        printWin.document.write(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Cam kết - ${studentName}</title>
-<style>
-    @page { size: A4; margin: 20mm; }
-    body { font-family: 'Times New Roman', serif; font-size: 14px; line-height: 1.8; color: #000; max-width: 700px; margin: 0 auto; padding: 20px; }
-    h2 { text-align: center; font-size: 18px; margin-bottom: 4px; }
-    h3 { text-align: center; font-size: 14px; font-weight: normal; font-style: italic; margin-bottom: 20px; }
-    h4 { font-size: 15px; margin: 16px 0 8px; }
-    .info-row { display: flex; gap: 20px; margin-bottom: 6px; }
-    .info-row span { min-width: 200px; }
-    .dot-line { border-bottom: 1px dotted #000; flex: 1; min-width: 100px; display: inline-block; }
-    .sig-box { display: flex; justify-content: flex-end; margin-top: 30px; }
-    .sig-area { text-align: center; width: 250px; }
-    .sig-area img { max-height: 100px; }
-    ul { margin: 4px 0 8px 20px; }
-    @media print { body { padding: 0; } button { display: none !important; } }
-</style></head><body>
-<h2>BẢN CAM KẾT CHẤP NHẬN RỦI RO<br>VÀ XÁC NHẬN QUYỀN HÌNH ẢNH</h2>
-<h3>(Dành cho Học viên tham gia hoạt động tại CLB Lặn Thăng Long)</h3>
-
-<div class="info-row"><span>Tôi, (Họ và tên): <strong>${studentName}</strong></span></div>
-<div class="info-row">
-    <span>Ngày sinh: <strong>${d.dateOfBirth || '......./......./...........'}</strong></span>
-    <span>CMND/CCCD: <strong>${d.cccd || '.................................'}</strong></span>
-</div>
-<div class="info-row">
-    <span>Số điện thoại: <strong>${d.phone || '.................................'}</strong></span>
-    <span>Email: .................................</span>
-</div>
-<div class="info-row">
-    <span>Người liên hệ khẩn cấp: <strong>${d.emergencyContactName || '.........................'}</strong></span>
-    <span>SĐT: <strong>${d.emergencyContactPhone || '.........................'}</strong></span>
-</div>
-
-<p>Bằng việc ký vào văn bản này, tôi tự nguyện đăng ký tham gia khóa học/hoạt động lặn và đồng ý với các điều khoản sau đây:</p>
-
-<h4>I. CAM KẾT VỀ SỨC KHỎE VÀ QUẢN LÝ RỦI RO</h4>
-<p><strong>Nhận thức rủi ro:</strong> Tôi hiểu rằng lặn (bao gồm lặn tự do và lặn khí tài) là môn thể thao tiềm ẩn rủi ro đặc thù như: chấn thương áp suất tai/phổi, ngất xỉu do thiếu oxy (blackout), hoặc các tai nạn dưới nước khác. Tôi tự nguyện chấp nhận các rủi ro này.</p>
-<p><strong>Tình trạng sức khỏe:</strong> Tôi xác nhận mình không có tiền sử bệnh tim mạch, hô hấp nghiêm trọng, động kinh hoặc các bệnh lý khác mà bác sĩ khuyến cáo không được lặn. Tôi cam kết không sử dụng rượu bia hoặc chất kích thích trước và trong khi tham gia buổi học.</p>
-<p><strong>Tuân thủ an toàn:</strong> Tôi cam kết tuân thủ tuyệt đối các quy tắc an toàn và hướng dẫn của Huấn luyện viên. Tôi hiểu rằng bất kỳ hành vi vi phạm kỷ luật nào gây nguy hiểm cho bản thân và người khác sẽ dẫn đến việc đình chỉ hoạt động ngay lập tức.</p>
-<p><strong>Miễn trừ trách nhiệm:</strong> Tôi và người đại diện hợp pháp của tôi đồng ý miễn trừ toàn bộ trách nhiệm pháp lý đối với CLB Lặn Thăng Long và đội ngũ huấn luyện viên trong trường hợp xảy ra sự cố, thương tích hoặc mất mát tài sản cá nhân phát sinh từ việc tham gia hoạt động, trừ trường hợp lỗi cố ý từ phía câu lạc bộ.</p>
-
-<h4>II. PHÓ THÁC VÀ CHO PHÉP SỬ DỤNG HÌNH ẢNH</h4>
-<p><strong>Ghi hình:</strong> Tôi đồng ý cho phép CLB Lặn Thăng Long ghi hình, chụp ảnh và ghi âm trong suốt quá trình tôi tham gia các buổi học (dưới nước và trên cạn).</p>
-<p><strong>Mục đích sử dụng:</strong> Tôi chấp thuận để câu lạc bộ sử dụng các tư liệu hình ảnh/video có mặt tôi vào các mục đích:</p>
-<ul>
-<li>Phân tích kỹ thuật để cải thiện kỹ năng cho cá nhân tôi và học viên khác.</li>
-<li>Làm tư liệu giảng dạy và đào tạo.</li>
-<li>Truyền thông và quảng bá trên các nền tảng mạng xã hội (Facebook, TikTok, YouTube, Website...) của câu lạc bộ.</li>
-</ul>
-<p><strong>Quyền sở hữu:</strong> Tôi xác nhận các hình ảnh và video này thuộc bản quyền của câu lạc bộ. Tôi từ bỏ quyền yêu cầu thù lao hoặc kiểm duyệt hình ảnh trước khi đăng tải, miễn là các hình ảnh đó không vi phạm thuần phong mỹ tục hoặc làm tổn hại đến danh dự cá nhân.</p>
-
-<p><strong>Tôi đã đọc, hiểu rõ và hoàn toàn đồng ý với tất cả các nội dung nêu trên.</strong></p>
-
-<div class="sig-box">
-    <div class="sig-area">
-        <p>Hà Nội, ngày ${signedDateObj.getDate()} tháng ${signedDateObj.getMonth()+1} năm ${signedDateObj.getFullYear()}</p>
-        <p><strong>NGƯỜI LÀM CAM KẾT</strong></p>
-        <p style="font-style:italic; font-size:12px;">(Ký và ghi rõ họ tên)</p>
-        ${d.waiverSignature ? `<img src="${d.waiverSignature}" alt="Chữ ký">` : '<br><br><br>'}
-        <p><strong>${studentName}</strong></p>
-    </div>
-</div>
-
-<div style="text-align:center; margin-top:30px;">
-    <button onclick="window.print()" style="padding:10px 30px; font-size:14px; background:#2563eb; color:#fff; border:none; border-radius:8px; cursor:pointer; font-weight:600;">🖨️ In / Lưu PDF</button>
-</div>
-</body></html>`);
-        printWin.document.close();
-    } catch (e) {
-        alert('Lỗi xuất: ' + e.message);
     }
 };
 
@@ -7184,132 +6561,7 @@ function loadAdminUsers() {
     // Sau khi nạp Users Pending, cũng chạy luôn nạp Thống Kê
     loadAdminStaffStats();
     loadAdminDetailedOverview();
-    loadAllStaff();
 }
-
-// Danh sách tất cả nhân viên đã duyệt
-let _allStaffDocs = [];
-let allStaffUnsub = null;
-function loadAllStaff() {
-    if (allStaffUnsub) allStaffUnsub();
-    allStaffUnsub = db.collection('users').where('role', '!=', 'PENDING').onSnapshot(snap => {
-        _allStaffDocs = snap.docs;
-        renderAllStaffList();
-    });
-}
-
-const ROLE_LABELS = {
-    'ADMIN': '👑 Admin',
-    'MANAGER': '🏢 Quản lý',
-    'SALE': '💼 Sale',
-    'TEACHER': '🏊 Giáo viên',
-    'LETAN': '📋 Lễ tân',
-    'KETOAN': '💰 Kế toán',
-    'FIRED': '🚫 Đã nghỉ'
-};
-
-const ROLE_COLORS = {
-    'ADMIN': '#8b5cf6',
-    'MANAGER': '#0891b2',
-    'SALE': '#f59e0b',
-    'TEACHER': '#3b82f6',
-    'LETAN': '#10b981',
-    'KETOAN': '#ec4899',
-    'FIRED': '#6b7280'
-};
-
-window.renderAllStaffList = function () {
-    const list = document.getElementById('admin-all-staff-list');
-    const countEl = document.getElementById('admin-all-staff-count');
-    if (!list) return;
-
-    const roleFilter = document.getElementById('admin-all-staff-role-filter')?.value || '';
-    const search = (document.getElementById('admin-all-staff-search')?.value || '').toLowerCase().trim();
-
-    let filtered = _allStaffDocs.filter(doc => {
-        const u = doc.data();
-        if (roleFilter && u.role !== roleFilter) return false;
-        if (search) {
-            const name = (u.name || '').toLowerCase();
-            const email = (u.email || '').toLowerCase();
-            if (!name.includes(search) && !email.includes(search)) return false;
-        }
-        return true;
-    });
-
-    // Sort: ADMIN first, then by name
-    const roleOrder = ['ADMIN', 'MANAGER', 'KETOAN', 'SALE', 'TEACHER', 'LETAN', 'FIRED'];
-    filtered.sort((a, b) => {
-        const ra = roleOrder.indexOf(a.data().role);
-        const rb = roleOrder.indexOf(b.data().role);
-        if (ra !== rb) return ra - rb;
-        return (a.data().name || '').localeCompare(b.data().name || '');
-    });
-
-    if (countEl) countEl.textContent = `${filtered.length} tài khoản`;
-
-    if (filtered.length === 0) {
-        list.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-muted);">Không tìm thấy tài khoản nào.</div>`;
-        return;
-    }
-
-    const branchMap = {};
-    FIXED_BRANCHES.forEach(b => { branchMap[b.id] = b.name; });
-
-    list.innerHTML = filtered.map(doc => {
-        const u = doc.data();
-        const roleLabel = ROLE_LABELS[u.role] || u.role;
-        const roleColor = ROLE_COLORS[u.role] || '#6b7280';
-        const branchName = branchMap[u.branchId] || 'Chưa gán';
-        const isSelf = doc.id === currentUserId;
-        const canEdit = isSuperAdmin && !isSelf;
-
-        // Branch options for edit
-        const branchOpts = localState.branches.map(b =>
-            `<option value="${b.id}" ${b.id === u.branchId ? 'selected' : ''}>${b.name}</option>`
-        ).join('');
-
-        return `<div style="display:flex; align-items:center; gap:12px; padding:12px 16px; background:var(--card-bg); border:1px solid ${isSelf ? 'rgba(139,92,246,0.3)' : 'var(--border-color)'}; border-radius:10px; flex-wrap:wrap; ${isSelf ? 'box-shadow:0 0 0 1px rgba(139,92,246,0.15);' : ''}">
-            <div style="flex:1; min-width:160px;">
-                <div style="font-weight:600; font-size:14px; color:var(--text-color);">${u.name || 'N/A'} ${isSelf ? '<span style="font-size:10px; color:#8b5cf6;">(Bạn)</span>' : ''}</div>
-                <div style="font-size:11px; color:var(--text-muted);">${u.email || ''}</div>
-            </div>
-            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                <span style="font-size:11px; padding:3px 10px; border-radius:20px; font-weight:600; background:${roleColor}15; color:${roleColor}; border:1px solid ${roleColor}30;">${roleLabel}</span>
-                <span style="font-size:11px; color:var(--text-muted);">${branchName}</span>
-                ${canEdit ? `
-                <select id="staff-role-${doc.id}" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:11px;">
-                    <option value="SALE" ${u.role === 'SALE' ? 'selected' : ''}>💼 Sale</option>
-                    <option value="TEACHER" ${u.role === 'TEACHER' ? 'selected' : ''}>🏊 GV</option>
-                    <option value="MANAGER" ${u.role === 'MANAGER' ? 'selected' : ''}>🏢 QL</option>
-                    <option value="LETAN" ${u.role === 'LETAN' ? 'selected' : ''}>📋 Lễ tân</option>
-                    <option value="KETOAN" ${u.role === 'KETOAN' ? 'selected' : ''}>💰 KT</option>
-                    <option value="ADMIN" ${u.role === 'ADMIN' ? 'selected' : ''}>👑 Admin</option>
-                    <option value="FIRED" ${u.role === 'FIRED' ? 'selected' : ''}>🚫 Nghỉ</option>
-                </select>
-                <select id="staff-branch-${doc.id}" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:11px;">
-                    ${branchOpts}
-                </select>
-                <button onclick="updateStaffRole('${doc.id}', '${u.name?.replace(/'/g, "\\\\'") || ''}')" style="padding:4px 10px; border-radius:6px; border:1px solid rgba(59,130,246,0.3); background:rgba(59,130,246,0.1); color:#3b82f6; font-size:11px; font-weight:600; cursor:pointer;">Lưu</button>
-                ` : ''}
-            </div>
-        </div>`;
-    }).join('');
-};
-
-window.updateStaffRole = async function (userId, userName) {
-    if (!isSuperAdmin) return alert('⚠️ Chỉ Admin chính mới có quyền thay đổi!');
-    const newRole = document.getElementById(`staff-role-${userId}`)?.value;
-    const newBranch = document.getElementById(`staff-branch-${userId}`)?.value;
-    if (!newRole || !newBranch) return;
-    if (!confirm(`Cập nhật "${userName}":\n→ Vai trò: ${ROLE_LABELS[newRole] || newRole}\n→ Cơ sở: ${FIXED_BRANCHES.find(b => b.id === newBranch)?.name || newBranch}`)) return;
-    try {
-        await db.collection('users').doc(userId).update({ role: newRole, branchId: newBranch });
-        alert(`✅ Đã cập nhật quyền cho "${userName}"!`);
-    } catch (e) {
-        alert('Lỗi: ' + e.message);
-    }
-};
 
 let adminStatsUnsub = null;
 function loadAdminStaffStats() {
@@ -7650,12 +6902,11 @@ window.fireUser = async function (userId, userName, branchId) {
 
 // Admin tạm dừng GV khỏi hàng đợi
 window.pauseTeacher = async function (userId, userName, branchId) {
-    if (currentUserRole === 'ADMIN' && !isSuperAdmin) return alert('⚠️ Chỉ Admin chính mới có quyền tạm dừng GV!');
-    if (!confirm(`⏸️ Xác nhận TẠM DỪNG "${userName}" khỏi hàng đợi nhận học viên?\n\nGiáo viên sẽ không nhận học viên mới cho đến khi bạn cho phép quay lại.`)) return;
+    if (!confirm(`⏸️ Xác nhận TẠM DỮNG "${userName}" khỏi hàng đợi nhận học viên?\n\nGiáo viên sẽ không nhận học viên mới cho đến khi bạn cho phép quay lại.`)) return;
     try {
         await db.collection('users').doc(userId).update({ queuePaused: true });
 
-        // Xóa khỏi fixedOrder + dọn debtMap + fixedSlotNumbers
+        // Xóa khỏi fixedOrder
         if (branchId) {
             const qDoc = db.collection('queues').doc(branchId);
             await db.runTransaction(async (transaction) => {
@@ -7663,33 +6914,9 @@ window.pauseTeacher = async function (userId, userName, branchId) {
                 if (doc.exists) {
                     let fo = doc.data().fixedOrder || [];
                     let ci = doc.data().currentIndex || 0;
-                    let dm = doc.data().debtMap || {};
-                    let slotNums = doc.data().fixedSlotNumbers || [];
-
-                    // Xóa debt slot cũ trước khi xóa vị trí
-                    // Rebuild debtMap cho vị trí mới sau khi xóa
-                    const newFo = [];
-                    const newSlotNums = [];
-                    const newDm = {};
-                    let newIdx = 0;
-                    for (let i = 0; i < fo.length; i++) {
-                        if (fo[i] === userId) continue; // Bỏ qua GV bị pause
-                        newFo.push(fo[i]);
-                        if (slotNums[i]) newSlotNums.push(slotNums[i]);
-                        // Chuyển debt từ slot cũ sang slot mới
-                        const oldKey = 's' + i;
-                        if (dm[oldKey] && dm[oldKey] > 0) {
-                            newDm['s' + newIdx] = dm[oldKey];
-                        }
-                        newIdx++;
-                    }
-                    if (ci >= newFo.length) ci = 0;
-                    transaction.update(qDoc, {
-                        fixedOrder: newFo,
-                        currentIndex: ci,
-                        debtMap: newDm,
-                        fixedSlotNumbers: newSlotNums
-                    });
+                    fo = fo.filter(id => id !== userId);
+                    if (ci >= fo.length) ci = 0;
+                    transaction.update(qDoc, { fixedOrder: fo, currentIndex: ci });
                 }
             });
         }
@@ -7714,23 +6941,6 @@ window.resumeTeacher = async function (userId, userName, branchId) {
         // Push vào cuối queue
         await pushTeacherToQueue(userId, teacherType, branchId);
 
-        // Xóa nợ cũ cho các slot mới của GV vừa vào (tránh kế thừa debt sai)
-        const qDoc = db.collection('queues').doc(branchId);
-        await db.runTransaction(async (transaction) => {
-            const doc = await transaction.get(qDoc);
-            if (!doc.exists) return;
-            const fo = doc.data().fixedOrder || [];
-            let dm = doc.data().debtMap || {};
-            let changed = false;
-            for (let i = 0; i < fo.length; i++) {
-                if (fo[i] === userId && dm['s' + i]) {
-                    delete dm['s' + i];
-                    changed = true;
-                }
-            }
-            if (changed) transaction.update(qDoc, { debtMap: dm });
-        });
-
         alert(`▶️ "${userName}" đã quay lại hàng đợi! Đã xếp vào cuối với ${teacherType === 'Chính' ? '2 vé' : '1 vé'}.`);
     } catch (e) {
         console.error(e);
@@ -7740,7 +6950,6 @@ window.resumeTeacher = async function (userId, userName, branchId) {
 
 // Admin đẩy GV lên đầu hàng đợi (bù phạt oan)
 window.boostTeacher = async function (teacherId, teacherName) {
-    if (currentUserRole === 'ADMIN' && !isSuperAdmin) return alert('⚠️ Chỉ Admin chính mới có quyền ưu tiên GV!');
     if (!confirm(`⬆️ Xác nhận ƯU TIÊN cho "${teacherName}"?\n\nSẽ xóa 1 lần phạt gần nhất và đẩy GV lên đầu hàng đợi.`)) return;
 
     try {
@@ -7793,45 +7002,8 @@ window.boostTeacher = async function (teacherId, teacherName) {
     }
 };
 
-// Admin: Xóa 1 nợ lượt cho 1 GV (không đổi vị trí trong hàng đợi)
-window.clearTeacherDebt = async function (teacherId, teacherName) {
-    if (!confirm(`🔄 Xóa 1 nợ lượt cho "${teacherName}"?\n\nGV giữ nguyên vị trí trong hàng đợi.`)) return;
-    try {
-        const userDoc = await db.collection('users').doc(teacherId).get();
-        const branchId = userDoc.data()?.branchId;
-        if (!branchId) return alert('Không tìm thấy chi nhánh GV!');
-
-        const qDoc = db.collection('queues').doc(branchId);
-        await db.runTransaction(async (transaction) => {
-            const doc = await transaction.get(qDoc);
-            if (!doc.exists) return;
-            const fo = doc.data().fixedOrder || [];
-            let dm = doc.data().debtMap || {};
-            let cleared = false;
-            // Chỉ xóa 1 lượt nợ (slot đầu tiên tìm thấy)
-            for (let i = 0; i < fo.length; i++) {
-                if (fo[i] === teacherId && (dm['s' + i] || 0) > 0) {
-                    dm['s' + i]--;
-                    if (dm['s' + i] <= 0) delete dm['s' + i];
-                    cleared = true;
-                    break;
-                }
-            }
-            if (cleared) {
-                transaction.update(qDoc, { debtMap: dm });
-            }
-        });
-
-        alert(`✅ Đã xóa 1 nợ lượt cho "${teacherName}"!`);
-    } catch (e) {
-        console.error('clearTeacherDebt error:', e);
-        alert('Lỗi: ' + e.message);
-    }
-};
-
 // Admin: Xóa toàn bộ phạt của 1 cơ sở
 window.clearBranchPenalties = async function (branchId, branchName) {
-    if (currentUserRole === 'ADMIN' && !isSuperAdmin) return alert('⚠️ Chỉ Admin chính mới có quyền xóa phạt!');
     if (!confirm('Xóa TẤT CẢ lịch sử phạt của "' + (branchName || branchId) + '"?\n\nHành động này không thể hoàn tác!')) return;
     try {
         const snap = await db.collection('penalties').where('branchId', '==', branchId).get();
@@ -7846,7 +7018,6 @@ window.clearBranchPenalties = async function (branchId, branchName) {
 };
 
 window.updateUserRole = async function (userId) {
-    if (currentUserRole === 'ADMIN' && !isSuperAdmin) return alert('⚠️ Chỉ Admin chính mới có quyền cập nhật quyền người dùng!');
     const roleSel = document.getElementById(`role-select-${userId}`);
     const branchSel = document.getElementById(`branch-select-${userId}`);
 
@@ -7916,107 +7087,6 @@ let adminDetailedUnsubUsers = null;
 let adminDetailedUnsubStudents = null;
 let adminDetailedUnsubPenalties = null;
 
-// Helper: build trend chart HTML (day/week/month) for items with date field
-function buildTrendChart(items, dateExtractor, chartId, color, label) {
-    const now = new Date();
-
-    function buildBars(buckets, labelFn, maxW) {
-        const maxVal = Math.max(...Object.values(buckets), 1);
-        const keys = Object.keys(buckets).sort();
-        let html = `<div style="display:flex; align-items:flex-end; gap:3px; height:80px; padding:4px 0; overflow-x:auto;">`;
-        keys.forEach(k => {
-            const c = buckets[k];
-            const pct = Math.max((c / maxVal) * 100, 3);
-            const lbl = labelFn(k);
-            const isLast = k === keys[keys.length - 1];
-            html += `<div style="display:flex; flex-direction:column; align-items:center; flex:1; min-width:${maxW}px;">`;
-            html += `<div style="font-size:9px; font-weight:600; color:${c > 0 ? color : 'var(--text-muted)'}; margin-bottom:2px;">${c > 0 ? c : ''}</div>`;
-            html += `<div style="width:100%; max-width:${maxW - 4}px; height:${pct}%; background:${isLast ? color : color + '50'}; border-radius:3px 3px 0 0; min-height:3px;"></div>`;
-            html += `<div style="font-size:8px; color:${isLast ? color : 'var(--text-muted)'}; margin-top:2px; font-weight:${isLast ? '700' : '400'}; white-space:nowrap;">${lbl}</div>`;
-            html += `</div>`;
-        });
-        html += `</div>`;
-        return html;
-    }
-
-    // --- Day buckets (14 days) ---
-    const dayBuckets = {};
-    for (let d = 13; d >= 0; d--) {
-        const dt = new Date(now); dt.setDate(dt.getDate() - d);
-        dayBuckets[dt.toISOString().split('T')[0]] = 0;
-    }
-    items.forEach(item => {
-        const dt = dateExtractor(item);
-        if (dt) { const k = dt.toISOString().split('T')[0]; if (dayBuckets[k] !== undefined) dayBuckets[k]++; }
-    });
-    const dayHtml = buildBars(dayBuckets, k => k.slice(5), 28);
-
-    // --- Week buckets (8 weeks) ---
-    const weekBuckets = {};
-    for (let w = 7; w >= 0; w--) {
-        const dt = new Date(now); dt.setDate(dt.getDate() - w * 7);
-        const mon = new Date(dt); mon.setDate(mon.getDate() - mon.getDay() + 1);
-        const k = mon.toISOString().split('T')[0];
-        weekBuckets[k] = 0;
-    }
-    items.forEach(item => {
-        const dt = dateExtractor(item);
-        if (dt) {
-            const mon = new Date(dt); mon.setDate(mon.getDate() - mon.getDay() + 1);
-            const k = mon.toISOString().split('T')[0];
-            if (weekBuckets[k] !== undefined) weekBuckets[k]++;
-        }
-    });
-    const weekHtml = buildBars(weekBuckets, k => { const d = new Date(k); return `${d.getDate()}/${d.getMonth()+1}`; }, 48);
-
-    // --- Month buckets (6 months) ---
-    const monthBuckets = {};
-    for (let m = 5; m >= 0; m--) {
-        const dt = new Date(now.getFullYear(), now.getMonth() - m, 1);
-        const k = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
-        monthBuckets[k] = 0;
-    }
-    items.forEach(item => {
-        const dt = dateExtractor(item);
-        if (dt) {
-            const k = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
-            if (monthBuckets[k] !== undefined) monthBuckets[k]++;
-        }
-    });
-    const monthHtml = buildBars(monthBuckets, k => { const [y, m] = k.split('-'); return `T${parseInt(m)}`; }, 60);
-
-    // Toggle buttons + chart panels
-    const btnStyle = (active) => `padding:4px 12px; border-radius:6px; border:1px solid ${active ? color + '50' : 'var(--border-color)'}; background:${active ? color + '15' : 'transparent'}; color:${active ? color : 'var(--text-muted)'}; font-size:11px; font-weight:600; cursor:pointer;`;
-
-    let html = `<div style="margin-top:12px;">`;
-    html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">`;
-    html += `<div style="font-weight:600; color:var(--text-color);"><i class="fa-solid fa-chart-bar" style="color:${color};"></i> ${label}</div>`;
-    html += `<div style="display:flex; gap:4px;">`;
-    html += `<button onclick="switchTrend('${chartId}','day')" id="${chartId}-btn-day" style="${btnStyle(true)}">14 ngày</button>`;
-    html += `<button onclick="switchTrend('${chartId}','week')" id="${chartId}-btn-week" style="${btnStyle(false)}">8 tuần</button>`;
-    html += `<button onclick="switchTrend('${chartId}','month')" id="${chartId}-btn-month" style="${btnStyle(false)}">6 tháng</button>`;
-    html += `</div></div>`;
-    html += `<div id="${chartId}-day">${dayHtml}</div>`;
-    html += `<div id="${chartId}-week" style="display:none;">${weekHtml}</div>`;
-    html += `<div id="${chartId}-month" style="display:none;">${monthHtml}</div>`;
-    html += `</div>`;
-    return html;
-}
-
-window.switchTrend = function (chartId, mode) {
-    ['day', 'week', 'month'].forEach(m => {
-        const panel = document.getElementById(`${chartId}-${m}`);
-        const btn = document.getElementById(`${chartId}-btn-${m}`);
-        if (panel) panel.style.display = m === mode ? 'block' : 'none';
-        if (btn) {
-            btn.style.background = m === mode ? 'rgba(100,100,100,0.15)' : 'transparent';
-            btn.style.fontWeight = m === mode ? '700' : '500';
-            btn.style.borderColor = m === mode ? 'var(--text-muted)' : 'var(--border-color)';
-            btn.style.color = m === mode ? 'var(--text-color)' : 'var(--text-muted)';
-        }
-    });
-};
-
 function loadAdminDetailedOverview() {
     if (adminDetailedUnsubUsers) adminDetailedUnsubUsers();
     if (adminDetailedUnsubStudents) adminDetailedUnsubStudents();
@@ -8028,7 +7098,6 @@ function loadAdminDetailedOverview() {
     let usersData = [];
     let studentsData = [];
     let penaltiesData = [];
-    let clbAthletesData = [];
 
     adminDetailedUnsubUsers = db.collection('users').onSnapshot(snapUsers => {
         usersData = snapUsers.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -8042,13 +7111,6 @@ function loadAdminDetailedOverview() {
 
     adminDetailedUnsubPenalties = db.collection('penalties').onSnapshot(snapPenalties => {
         penaltiesData = snapPenalties.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        processOverview();
-    });
-
-    // CLB Athletes listener
-    let adminDetailedUnsubClb = null;
-    adminDetailedUnsubClb = db.collection('athletes').onSnapshot(snapClb => {
-        clbAthletesData = snapClb.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         processOverview();
     });
 
@@ -8120,7 +7182,7 @@ function loadAdminDetailedOverview() {
                     const reasonText = reasons.length > 0 ? reasons[reasons.length - 1] : '';
                     fullHtml += `<div style="padding:3px 0; border-bottom:1px dashed rgba(239,68,68,0.1);">`;
                     fullHtml += `<div style="display:flex; justify-content:space-between; font-size:12px;"><span>${pc[tid].name}</span><span style="color:var(--danger); font-weight:700;">${pc[tid].count} lần`;
-                    if (currentUserRole === 'ADMIN') { fullHtml += ` <button onclick="boostTeacher('${tid}','${pc[tid].name.replace(/'/g, "\\\\'")}')" style="padding:1px 5px; font-size:10px; border-radius:4px; border:1px solid rgba(34,197,94,0.4); background:rgba(34,197,94,0.1); color:#16a34a; cursor:pointer;" title="Ưu tiên"><i class="fa-solid fa-arrow-up"></i></button> <button onclick="clearTeacherDebt('${tid}','${pc[tid].name.replace(/'/g, "\\\\'")}')" style="padding:1px 5px; font-size:10px; border-radius:4px; border:1px solid rgba(59,130,246,0.4); background:rgba(59,130,246,0.1); color:#3b82f6; cursor:pointer;" title="Xóa nợ lượt"><i class="fa-solid fa-eraser"></i></button>`; }
+                    if (currentUserRole === 'ADMIN') { fullHtml += ` <button onclick="boostTeacher('${tid}','${pc[tid].name.replace(/'/g, "\\\\'")}')" style="padding:1px 5px; font-size:10px; border-radius:4px; border:1px solid rgba(34,197,94,0.4); background:rgba(34,197,94,0.1); color:#16a34a; cursor:pointer;" title="Ưu tiên"><i class="fa-solid fa-arrow-up"></i></button>`; }
                     fullHtml += `</span></div>`;
                     if (reasonText) { fullHtml += `<div style="font-size:10px; color:var(--text-muted); margin-top:1px;">💬 ${reasonText}</div>`; }
                     fullHtml += `</div>`;
@@ -8175,69 +7237,7 @@ function loadAdminDetailedOverview() {
             }
         });
         if (!hasWarn) { fullHtml += `<div style="text-align:center; color:var(--secondary); padding:10px;"><i class="fa-solid fa-check-circle" style="font-size:20px;"></i><br>Tất cả cơ sở đang phân bổ cân bằng ✅</div>`; }
-
-        // Trend HV toàn hệ thống
-        const hvDateExtractor = (s) => {
-            if (s.createdAt?.toDate) return s.createdAt.toDate();
-            if (s.assignedAt?.toDate) return s.assignedAt.toDate();
-            return null;
-        };
-        fullHtml += buildTrendChart(studentsData, hvDateExtractor, 'trend-hv', '#2563eb', 'Trend HV mới toàn hệ thống');
-
         fullHtml += `</div></div>`;
-
-        // ======= THỐNG KÊ CLB TL KID =======
-        if (clbAthletesData.length > 0) {
-            const now = new Date();
-            const clbActive = clbAthletesData.filter(a => {
-                if (a.status === 'frozen') return false;
-                if (!a.expiryDate) return true;
-                const exp = a.expiryDate.toDate ? a.expiryDate.toDate() : new Date(a.expiryDate);
-                return exp >= now;
-            });
-
-            fullHtml += `<div style="background:var(--card-bg); border-radius:12px; border:1px solid var(--border-color); overflow:hidden; margin-top:16px;">`;
-            fullHtml += `<div style="padding:14px 18px; background:linear-gradient(135deg, #f59e0b, #d97706); color:white;"><b style="font-size:16px;"><i class="fa-solid fa-medal"></i> Thống Kê CLB TL KID</b></div>`;
-            fullHtml += `<div style="padding:16px; font-size:13px;">`;
-
-            // Tổng quan - chỉ hiện đang hoạt động
-            fullHtml += `<div style="text-align:center; padding:14px; background:rgba(16,185,129,0.05); border-radius:10px; margin-bottom:14px;">`;
-            fullHtml += `<div style="font-size:32px; font-weight:700; color:#10b981;">${clbActive.length}</div>`;
-            fullHtml += `<div style="font-size:12px; color:var(--text-muted);">VĐV đang hoạt động</div>`;
-            fullHtml += `</div>`;
-
-            // Theo cơ sở
-            fullHtml += `<div style="margin-bottom:14px;">`;
-            FIXED_BRANCHES.forEach(branch => {
-                const brClb = clbAthletesData.filter(a => a.branchId === branch.id);
-                const brActive = brClb.filter(a => {
-                    if (a.status === 'frozen') return false;
-                    if (!a.expiryDate) return true;
-                    const exp = a.expiryDate.toDate ? a.expiryDate.toDate() : new Date(a.expiryDate);
-                    return exp >= now;
-                });
-                if (brClb.length > 0) {
-                    fullHtml += `<div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(245,158,11,0.03); border-radius:6px; margin-bottom:4px;">`;
-                    fullHtml += `<span style="font-weight:600;">${branch.name}</span>`;
-                    fullHtml += `<span><span style="color:#10b981; font-weight:600;">${brActive.length}</span> / ${brClb.length} VĐV</span>`;
-                    fullHtml += `</div>`;
-                }
-            });
-            fullHtml += `</div>`;
-
-            // Trend CLB dùng helper
-            const clbDateExtractor = (a) => {
-                if (a.createdAt?.toDate) return a.createdAt.toDate();
-                if (a.activateDate) {
-                    if (a.activateDate.toDate) return a.activateDate.toDate();
-                    return new Date(a.activateDate);
-                }
-                return null;
-            };
-            fullHtml += buildTrendChart(clbAthletesData, clbDateExtractor, 'trend-clb', '#f59e0b', 'Trend đăng ký VĐV CLB');
-
-            fullHtml += `</div></div>`;
-        }
 
         overviewContainer.innerHTML = fullHtml;
 
@@ -8495,10 +7495,6 @@ function renderAdminClbTable() {
             <td style="padding:12px 15px; color:var(--text-muted); font-size:13px;">${expStr}</td>
             <td style="padding:12px 15px;">
                 <span style="font-size:12px; padding:3px 10px; border-radius:12px; background:${statusColor}15; color:${statusColor}; font-weight:600;">${statusLabel}</span>
-                ${isExpired ? `<button onclick="renewClbAthlete('${a.id}', '${(a.name || '').replace(/'/g, "\\\\'")}')" 
-                    style="margin-left:6px; padding:3px 10px; border-radius:8px; border:1px solid rgba(16,185,129,0.3); background:rgba(16,185,129,0.1); color:#10b981; font-size:11px; font-weight:600; cursor:pointer;">
-                    <i class="fa-solid fa-rotate-right"></i> Gia hạn
-                </button>` : ''}
             </td>
         </tr>`;
     });
@@ -8513,147 +7509,6 @@ window.filterAdminClbStudents = function () {
         renderAdminClbTable();
     }
     window._lastAdminClbBranch = branchVal;
-};
-
-// ============ GIA HẠN VĐV CLB ============ //
-window.renewClbAthlete = async function (athleteId, athleteName) {
-    if (currentUserRole !== 'ADMIN') return alert('⚠️ Chỉ Admin được gia hạn!');
-
-    // Lấy thông tin VĐV hiện tại
-    const athlete = _adminClbData.find(a => a.id === athleteId) || {};
-    const oldContract = athlete.contractNumber || '';
-    const oldSessions = athlete.sessionsPerWeek || 3;
-    const oldMonths = athlete.contractMonths || 3;
-
-    // Tạo modal
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;';
-
-    // Default: số tháng cũ tính từ hôm nay
-    const defaultDate = new Date();
-    defaultDate.setMonth(defaultDate.getMonth() + oldMonths);
-    const defaultStr = defaultDate.toISOString().split('T')[0];
-    const inputStyle = 'width:100%; padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px; margin-bottom:10px;';
-
-    overlay.innerHTML = `
-        <div style="background:var(--card-bg); border-radius:16px; padding:24px; width:100%; max-width:380px; box-shadow:0 20px 60px rgba(0,0,0,0.3); max-height:90vh; overflow-y:auto;">
-            <h3 style="margin:0 0 4px; font-size:16px; color:var(--text-color);"><i class="fa-solid fa-rotate-right" style="color:#10b981;"></i> Gia Hạn HĐ CLB</h3>
-            <p style="margin:0 0 14px; font-size:13px; color:var(--text-muted);">VĐV: <strong>${athleteName}</strong></p>
-            
-            <label style="font-size:12px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:4px;">📋 Số hợp đồng mới:</label>
-            <input type="text" id="renew-contract-input" value="${oldContract}" placeholder="Nhập số HĐ mới" style="${inputStyle}">
-            
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                <div>
-                    <label style="font-size:12px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:4px;">📦 Số buổi/tuần:</label>
-                    <select id="renew-sessions-input" style="${inputStyle}">
-                        <option value="2" ${oldSessions == 2 ? 'selected' : ''}>2 buổi/tuần</option>
-                        <option value="3" ${oldSessions == 3 ? 'selected' : ''}>3 buổi/tuần</option>
-                        <option value="4" ${oldSessions == 4 ? 'selected' : ''}>4 buổi/tuần</option>
-                        <option value="5" ${oldSessions == 5 ? 'selected' : ''}>5 buổi/tuần</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:12px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:4px;">📅 Số tháng:</label>
-                    <select id="renew-months-input" style="${inputStyle}">
-                        <option value="1" ${oldMonths == 1 ? 'selected' : ''}>1 tháng</option>
-                        <option value="3" ${oldMonths == 3 ? 'selected' : ''}>3 tháng</option>
-                        <option value="6" ${oldMonths == 6 ? 'selected' : ''}>6 tháng</option>
-                        <option value="12" ${oldMonths == 12 ? 'selected' : ''}>12 tháng</option>
-                    </select>
-                </div>
-            </div>
-
-            <label style="font-size:12px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:4px;">📅 Gia hạn đến ngày:</label>
-            <input type="date" id="renew-date-input" value="${defaultStr}" style="${inputStyle}">
-            <div style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;">
-                <button onclick="document.getElementById('renew-date-input').valueAsDate = (() => { const d = new Date(); d.setMonth(d.getMonth()+1); return d; })()" 
-                    style="padding:4px 10px; border-radius:6px; border:1px solid var(--border-color); background:transparent; color:var(--text-muted); font-size:11px; cursor:pointer;">+1 tháng</button>
-                <button onclick="document.getElementById('renew-date-input').valueAsDate = (() => { const d = new Date(); d.setMonth(d.getMonth()+3); return d; })()" 
-                    style="padding:4px 10px; border-radius:6px; border:1px solid var(--border-color); background:transparent; color:var(--text-muted); font-size:11px; cursor:pointer;">+3 tháng</button>
-                <button onclick="document.getElementById('renew-date-input').valueAsDate = (() => { const d = new Date(); d.setMonth(d.getMonth()+6); return d; })()" 
-                    style="padding:4px 10px; border-radius:6px; border:1px solid var(--border-color); background:transparent; color:var(--text-muted); font-size:11px; cursor:pointer;">+6 tháng</button>
-                <button onclick="document.getElementById('renew-date-input').valueAsDate = (() => { const d = new Date(); d.setFullYear(d.getFullYear()+1); return d; })()" 
-                    style="padding:4px 10px; border-radius:6px; border:1px solid var(--border-color); background:transparent; color:var(--text-muted); font-size:11px; cursor:pointer;">+1 năm</button>
-            </div>
-            
-            <div style="background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.15); border-radius:8px; padding:8px 10px; margin-bottom:14px; font-size:11px; color:var(--text-muted);">
-                <i class="fa-solid fa-circle-info" style="color:#f59e0b;"></i> HĐ cũ: <strong>${oldContract}</strong> · ${oldSessions}b/tuần × ${oldMonths} tháng
-            </div>
-
-            <div style="display:flex; gap:10px; justify-content:flex-end;">
-                <button id="renew-cancel-btn" style="padding:8px 20px; border-radius:8px; border:1px solid var(--border-color); background:transparent; color:var(--text-muted); font-size:13px; cursor:pointer;">Huỷ</button>
-                <button id="renew-confirm-btn" style="padding:8px 20px; border-radius:8px; border:none; background:#10b981; color:#fff; font-size:13px; font-weight:600; cursor:pointer;">
-                    <i class="fa-solid fa-check"></i> Gia hạn
-                </button>
-            </div>
-        </div>`;
-
-    document.body.appendChild(overlay);
-
-    overlay.querySelector('#renew-cancel-btn').onclick = () => overlay.remove();
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-
-    overlay.querySelector('#renew-confirm-btn').onclick = async () => {
-        const dateVal = document.getElementById('renew-date-input')?.value;
-        const newContract = (document.getElementById('renew-contract-input')?.value || '').trim();
-        const newSessions = parseInt(document.getElementById('renew-sessions-input')?.value) || 3;
-        const newMonths = parseInt(document.getElementById('renew-months-input')?.value) || 3;
-
-        if (!dateVal) return alert('Vui lòng chọn ngày!');
-        if (!newContract) return alert('Vui lòng nhập số hợp đồng!');
-
-        const newExpiry = new Date(dateVal);
-        newExpiry.setHours(23, 59, 59, 999);
-
-        if (newExpiry <= new Date()) return alert('Ngày gia hạn phải sau hôm nay!');
-
-        try {
-            const renewData = {
-                contractNumber: newContract,
-                sessionsPerWeek: newSessions,
-                contractMonths: newMonths,
-                expiryDate: firebase.firestore.Timestamp.fromDate(newExpiry),
-                expiresAt: firebase.firestore.Timestamp.fromDate(newExpiry),
-                activatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                status: 'active',
-                isFrozen: false,
-                isExpired: false,
-                renewedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                renewedBy: currentUserId,
-                previousContractNumber: oldContract,
-                renewCount: firebase.firestore.FieldValue.increment(1)
-            };
-            // Update cả 2 collection
-            const results = await Promise.allSettled([
-                db.collection('athletes').doc(athleteId).update(renewData),
-                db.collection('clb_athletes').doc(athleteId).update(renewData)
-            ]);
-            const anyOk = results.some(r => r.status === 'fulfilled');
-            if (!anyOk) throw new Error('Không tìm thấy VĐV trong hệ thống!');
-
-            // Sync lên Google Sheet
-            const brId = athlete.branchId || currentBranchId;
-            const branchObj = FIXED_BRANCHES.find(b => b.id === brId);
-            syncToGoogleSheet({
-                action: 'renewClb',
-                branchName: branchObj?.name || 'N/A',
-                name: athleteName,
-                oldContract: oldContract,
-                newContract: newContract,
-                activatedAt: new Date().toLocaleDateString('vi-VN'),
-                expiresAt: newExpiry.toLocaleDateString('vi-VN'),
-                package: `${newSessions}b/tuần × ${newMonths} tháng`
-            });
-
-            overlay.remove();
-            alert(`✅ Đã gia hạn VĐV "${athleteName}"!\n\n📋 HĐ: ${newContract}\n📦 ${newSessions}b/tuần × ${newMonths} tháng\n📅 HSD: ${newExpiry.toLocaleDateString('vi-VN')}`);
-            loadAdminClbStudents();
-        } catch (e) {
-            console.error('Renew error:', e);
-            alert('❌ Lỗi gia hạn: ' + e.message);
-        }
-    };
 };
 
 // ============ ĐỔI SALE QUẢN LÝ HỢP ĐỒNG ============ //

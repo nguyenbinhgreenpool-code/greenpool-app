@@ -14,17 +14,22 @@
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <title>Quản lý Học viên Bơi lội</title>
-    <link rel="stylesheet" href="styles.css?v=5.75">
+    <title>Quản Lý Học Viên Bơi Lặn</title>
+    <link rel="stylesheet" href="styles.css?v=5.76">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <!-- Firebase SDK Compat Version để chạy trực tiếp trên file:// không cần Node.js -->
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-functions-compat.js"></script>
 
     <script>
         // Cấu hình Firebase
@@ -39,6 +44,13 @@
         // Khởi tạo Firebase
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
+        db.enablePersistence({ synchronizeTabs: true }).catch(err => {
+            if (err.code === 'failed-precondition') {
+                console.warn('Firestore persistence: nhiều tab đang mở');
+            } else if (err.code === 'unimplemented') {
+                console.warn('Firestore persistence: trình duyệt không hỗ trợ');
+            }
+        });
         const storage = firebase.storage();
 
         // Đăng kí Service Worker cho PWA
@@ -99,9 +111,15 @@
                     <div class="form-group pb-10" id="auth-customer-checkbox" style="display: none;">
                         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
                             <input type="checkbox" id="auth-is-customer"
-                                style="width: 18px; height: 18px; cursor: pointer;">
-                            <span>Tôi là <strong>Phụ huynh / Khách hàng</strong> (xem tiến trình học viên)</span>
+                                style="width: 18px; height: 18px; cursor: pointer;"
+                                onchange="document.getElementById('auth-contract-group').style.display = this.checked ? 'block' : 'none'">
+                            <span>Tôi là <strong>Khách hàng</strong> (xem tiến trình VĐV CLB)</span>
                         </label>
+                    </div>
+                    <div class="form-group pb-10" id="auth-contract-group" style="display: none;">
+                        <label for="auth-contract-number">Số Hợp Đồng CLB <span style="font-weight:400; color:var(--text-muted);">(tuỳ chọn)</span></label>
+                        <input type="text" id="auth-contract-number" placeholder="Bỏ trống nếu là HV cơ bản...">
+                        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Có HĐ CLB → nhập để xem thông tin + nhận thông báo điểm danh. Bỏ trống → tra cứu bình thường.</div>
                     </div>
                 </div>
 
@@ -112,6 +130,10 @@
             <button type="button" id="btn-auth-submit" class="btn btn-primary" style="width: 100%;">
                 Đăng Nhập
             </button>
+
+            <div id="forgot-password-link" style="text-align: center; margin-top: 10px;">
+                <a href="#" onclick="forgotPassword(); return false;" style="font-size: 13px; color: var(--primary); text-decoration: none;">🔑 Quên mật khẩu?</a>
+            </div>
 
             <div class="auth-toggle">
                 <span id="auth-toggle-text">Chưa có tài khoản?</span>
@@ -176,6 +198,10 @@
                 <li data-tab="letan" style="display: none;" id="nav-item-letan">
                     <i class="fa-solid fa-clipboard-user"></i>
                     <span>Lễ tân</span>
+                </li>
+                <li data-tab="finance" style="display: none;" id="nav-item-finance">
+                    <i class="fa-solid fa-coins"></i>
+                    <span>Finance</span>
                 </li>
                 <li data-tab="admin" style="display: none;" id="nav-item-admin">
                     <i class="fa-solid fa-users-gear"></i>
@@ -281,14 +307,41 @@
                             <p id="total-sales">0</p>
                         </div>
                     </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background: rgba(139, 92, 246, 0.1); color: #8b5cf6;">
+                            <i class="fa-solid fa-user-plus"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3>HV Mới Hôm Nay</h3>
+                            <p id="total-new-today">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background: rgba(16, 185, 129, 0.1); color: #10b981;">
+                            <i class="fa-solid fa-clipboard-check"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3>Điểm Danh Hôm Nay</h3>
+                            <p id="total-attendance-today">0</p>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Teacher List with Turns -->
-                <div class="section-container">
-                    <div class="section-header">
-                        <h3>Hàng Đợi Nhận Học Viên (Queue)</h3>
-                        <p class="subtitle">Thứ tự ưu tiên từ trái qua phải. Sale sẽ dựa vào đây để chủ động phân bổ.
-                        </p>
+                <div class="section-container" id="dashboard-queue-section">
+                    <div class="section-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+                        <div>
+                            <h3>Hàng Đợi Nhận Học Viên (Queue)</h3>
+                            <p class="subtitle">Thứ tự ưu tiên từ trái qua phải. Sale sẽ dựa vào đây để chủ động phân bổ.</p>
+                        </div>
+                        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                        <button id="btn-queue-debug" onclick="showQueueDebug()" style="display:none; padding:6px 14px; border-radius:8px; border:1px solid rgba(139,92,246,0.3); background:rgba(139,92,246,0.1); color:#8b5cf6; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;">
+                            <i class="fa-solid fa-bug"></i> Trạng thái Queue
+                        </button>
+                        <button id="btn-queue-history" onclick="showQueueHistory()" style="display:none; padding:6px 14px; border-radius:8px; border:1px solid rgba(16,185,129,0.3); background:rgba(16,185,129,0.1); color:#10b981; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;">
+                            <i class="fa-solid fa-clock-rotate-left"></i> Lịch sử Turn
+                        </button>
+                        </div>
                     </div>
                     <div class="teachers-queue" id="teachers-queue">
                         <!-- Dynamic content from JS -->
@@ -307,7 +360,7 @@
                 </div>
 
                 <!-- Đang Học Tại Bể (Live) -->
-                <div class="section-container">
+                <div class="section-container" id="dashboard-pool-section">
                     <div class="section-header">
                         <h3><i class="fa-solid fa-water" style="color: #06b6d4;"></i> Đang Học Tại Bể</h3>
                         <p class="subtitle">Học viên đã điểm danh trong 60 phút gần nhất, nhóm theo giáo viên.</p>
@@ -317,15 +370,40 @@
                     </div>
                 </div>
 
-                <!-- Phân tích Nhân khẩu HV -->
-                <div class="section-container">
-                    <div class="section-header">
-                        <h3><i class="fa-solid fa-chart-bar" style="color: var(--primary);"></i> Phân Tích Học Viên</h3>
-                        <p class="subtitle">Thống kê lứa tuổi, giới tính và kiểu bơi của học viên tại cơ sở.</p>
+                <!-- Phân tích Nhân khẩu HV & Trend Hợp Đồng -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+                    <!-- Phân tích Nhân khẩu -->
+                    <div class="section-container" style="margin-bottom: 0;">
+                        <div class="section-header">
+                            <h3><i class="fa-solid fa-chart-pie" style="color: var(--primary);"></i> Phân Tích Học Viên
+                            </h3>
+                            <p class="subtitle">Thống kê lứa tuổi, giới tính và kiểu bơi.</p>
+                        </div>
+                        <div id="demographics-analysis" style="display: flex; flex-direction: column; gap: 16px;">
+                            <div style="text-align:center; padding: 20px; color: var(--text-muted);">Đang phân tích dữ
+                                liệu...</div>
+                        </div>
                     </div>
-                    <div id="demographics-analysis" style="display: flex; flex-direction: column; gap: 16px;">
-                        <div style="text-align:center; padding: 20px; color: var(--text-muted);">Đang phân tích dữ
-                            liệu...</div>
+
+                    <!-- Trend Hợp Đồng Mới -->
+                    <div class="section-container" style="margin-bottom: 0;">
+                        <div class="section-header"
+                            style="display: flex; justify-content: space-between; align-items: flex-start;">
+                            <div>
+                                <h3><i class="fa-solid fa-chart-line" style="color: #10b981;"></i> Trend Hợp Đồng Mới
+                                </h3>
+                                <p class="subtitle">Số lượng học viên bơi cơ bản nhập mới theo ngày.</p>
+                            </div>
+                            <select id="trend-days-select" onchange="renderNewContractsChart()"
+                                style="padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-color); font-size: 12px;">
+                                <option value="7">7 ngày qua</option>
+                                <option value="14">14 ngày qua</option>
+                                <option value="30">30 ngày qua</option>
+                            </select>
+                        </div>
+                        <div style="width: 100%; height: 250px; position: relative;" id="trend-chart-container">
+                            <canvas id="newContractsChart"></canvas>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -422,6 +500,16 @@
                                     <option value="">-- Đang tải danh sách --</option>
                                 </select>
                             </div>
+                            <div class="form-group">
+                                <label for="self-recruit-reason">Lý do tự tuyển <span
+                                        style="color:#ef4444">*</span></label>
+                                <select id="self-recruit-reason" class="modern-select">
+                                    <option value="">-- Chọn lý do --</option>
+                                    <option value="Học viên yêu cầu">Học viên yêu cầu</option>
+                                    <option value="Nâng cấp gói Bơi">Nâng cấp gói Bơi</option>
+                                    <option value="Giáo viên Sale">Giáo viên Sale</option>
+                                </select>
+                            </div>
                             <button type="submit" class="btn btn-secondary"
                                 style="width: 100%; justify-content: center;">
                                 <i class="fa-solid fa-cloud-arrow-up"></i> Lưu Thông Tin Khách Tự Tuyển
@@ -451,14 +539,14 @@
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
                         <input type="text" id="sale-clb-name" placeholder="Họ tên VĐV *" class="modern-input"
                             style="padding:10px 14px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color);">
-                        <input type="text" id="sale-clb-phone" placeholder="Số điện thoại" class="modern-input"
+                        <input type="text" id="sale-clb-phone" placeholder="Số điện thoại *" class="modern-input"
                             style="padding:10px 14px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color);">
                         <select id="sale-clb-gender" class="modern-select"
                             style="padding:10px 14px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color);">
                             <option value="Nam">Nam</option>
                             <option value="Nữ">Nữ</option>
                         </select>
-                        <input type="text" id="sale-clb-contract" placeholder="Số hợp đồng" class="modern-input"
+                        <input type="text" id="sale-clb-contract" placeholder="Số hợp đồng *" class="modern-input"
                             style="padding:10px 14px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color);">
                         <select id="sale-clb-class" class="modern-select"
                             style="padding:10px 14px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color);">
@@ -482,7 +570,13 @@
                             <option value="6">6 tháng</option>
                             <option value="12">12 tháng</option>
                         </select>
+                        <input type="date" id="sale-clb-activate-date" class="modern-input"
+                            style="padding:10px 14px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color);"
+                            title="Ngày kích hoạt HĐ (để trống = kích hoạt khi điểm danh buổi đầu)">
+                        <label for="sale-clb-activate-date" style="font-size:11px; color:var(--text-muted); grid-column: span 2; margin-top:-8px;">📅 Ngày kích hoạt HĐ (để trống = kích hoạt khi điểm danh buổi đầu)</label>
                     </div>
+                    <textarea id="sale-clb-note" placeholder="📝 Phương án vào bể (VD: bố đưa đi, tự đi xe buýt...)" rows="2"
+                        style="width:100%; margin-top:12px; padding:10px 14px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
                     <button onclick="addAthleteSale()" class="btn btn-primary"
                         style="margin-top:15px; width:100%; justify-content:center; padding:12px; font-size:14px;">
                         <i class="fa-solid fa-user-plus"></i> Thêm VĐV CLB
@@ -492,36 +586,108 @@
 
             <!-- Thống kê Sale Tab -->
             <div id="tab-salestats" class="tab-content">
-                <div class="section-container">
-                    <div class="section-header">
-                        <h3><i class="fa-solid fa-chart-pie" style="color: var(--primary);"></i> Thống Kê Hợp Đồng Của
-                            Tôi</h3>
-                        <p class="subtitle">Tổng hợp số liệu hợp đồng đã đẩy vào hệ thống.</p>
-                    </div>
-                    <div id="sale-personal-stats"
-                        style="display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px; margin-bottom: 15px;">
-                    </div>
-                    <div style="margin-bottom: 10px;">
-                        <input type="text" id="sale-search-student" placeholder="🔍 Tìm học viên..."
-                            oninput="filterSaleContracts()"
-                            style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 13px; background: var(--card-bg); color: var(--text-color); box-sizing: border-box;">
-                        <div style="display: flex; gap: 6px; margin-top: 8px;">
-                            <button type="button" class="sale-filter-btn active" data-filter="all"
-                                onclick="setSaleFilter('all')"
-                                style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--primary); background: var(--primary); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;">Tất
-                                cả</button>
-                            <button type="button" class="sale-filter-btn" data-filter="active"
-                                onclick="setSaleFilter('active')"
-                                style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;">Đang
-                                học</button>
-                            <button type="button" class="sale-filter-btn" data-filter="done"
-                                onclick="setSaleFilter('done')"
-                                style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;">Hoàn
-                                thành</button>
+                <!-- Toggle HV / CLB -->
+                <div style="display:flex; gap:0; margin-bottom:18px; background:var(--card-bg); border-radius:12px; border:1px solid var(--border-color); overflow:hidden;">
+                    <button id="salestats-btn-hv" onclick="toggleSaleStatsMode(false)"
+                        style="flex:1; padding:12px; font-size:14px; font-weight:600; border:none; cursor:pointer; background:var(--primary); color:#fff; transition:all 0.3s;">
+                        📊 Học Viên Cơ Bản
+                    </button>
+                    <button id="salestats-btn-clb" onclick="toggleSaleStatsMode(true)"
+                        style="flex:1; padding:12px; font-size:14px; font-weight:600; border:none; cursor:pointer; background:transparent; color:var(--text-muted); transition:all 0.3s;">
+                        🏅 CLB TL KID
+                    </button>
+                </div>
+
+                <!-- === HV Cơ Bản Mode === -->
+                <div id="salestats-hv-mode">
+                    <div class="section-container">
+                        <div class="section-header">
+                            <h3><i class="fa-solid fa-chart-pie" style="color: var(--primary);"></i> Thống Kê Hợp Đồng Của
+                                Tôi</h3>
+                            <p class="subtitle">Tổng hợp số liệu hợp đồng đã đẩy vào hệ thống.</p>
+                        </div>
+                        <div style="margin-bottom:12px;">
+                            <button onclick="window.showPendingSaleConfirm()" style="padding:10px 18px; border-radius:8px; border:1px solid rgba(16,185,129,0.3); background:rgba(16,185,129,0.1); color:#059669; font-weight:600; cursor:pointer; font-size:13px;">
+                                <i class="fa-solid fa-clipboard-check"></i> Xác nhận chốt lương
+                            </button>
+                        </div>
+                        <div id="sale-personal-stats"
+                            style="display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px; margin-bottom: 15px;">
+                        </div>
+                        <div id="stats-sale-filter-wrap" style="margin-bottom:10px; display:none;">
+                            <select id="stats-sale-filter" onchange="renderSaleStats()"
+                                style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:13px; background:var(--card-bg); color:var(--text-color); font-weight:600;">
+                                <option value="">👥 Tất cả Sale</option>
+                            </select>
+                        </div>
+                        <div style="margin-bottom: 10px;">
+                            <input type="text" id="sale-search-student" placeholder="🔍 Tìm học viên..."
+                                oninput="filterSaleContracts()"
+                                style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 13px; background: var(--card-bg); color: var(--text-color); box-sizing: border-box;">
+                            <div style="display: flex; gap: 6px; margin-top: 8px;">
+                                <button type="button" class="sale-filter-btn active" data-filter="all"
+                                    onclick="setSaleFilter('all')"
+                                    style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--primary); background: var(--primary); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;">Tất
+                                    cả</button>
+                                <button type="button" class="sale-filter-btn" data-filter="active"
+                                    onclick="setSaleFilter('active')"
+                                    style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;">Đang
+                                    học</button>
+                                <button type="button" class="sale-filter-btn" data-filter="done"
+                                    onclick="setSaleFilter('done')"
+                                    style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;">Hoàn
+                                    thành</button>
+                                <button type="button" class="sale-filter-btn" data-filter="test"
+                                    onclick="setSaleFilter('test')"
+                                    style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;">🧪
+                                    Test</button>
+                            </div>
+                        </div>
+                        <div id="sale-contracts-list"
+                            style="display: flex; flex-direction: column; gap: 6px; max-height: 600px; overflow-y: auto;">
                         </div>
                     </div>
-                    <div id="sale-contracts-list"
-                        style="display: flex; flex-direction: column; gap: 6px; max-height: 600px; overflow-y: auto;">
+                </div>
+
+                <!-- === CLB TL KID Mode === -->
+                <div id="salestats-clb-mode" style="display:none;">
+                    <div class="section-container">
+                        <div class="section-header">
+                            <h3><i class="fa-solid fa-medal" style="color: #f59e0b;"></i> Thống Kê VĐV CLB TL KID</h3>
+                            <p class="subtitle">Danh sách VĐV CLB do bạn nhập vào hệ thống.</p>
+                        </div>
+                        <div id="sale-clb-stats"
+                            style="display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px; margin-bottom: 15px;">
+                        </div>
+                        <div id="stats-clb-sale-filter-wrap" style="margin-bottom:10px; display:none;">
+                            <select id="stats-clb-sale-filter" onchange="loadSaleClbStats()"
+                                style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:13px; background:var(--card-bg); color:var(--text-color); font-weight:600;">
+                                <option value="">👥 Tất cả Sale</option>
+                            </select>
+                        </div>
+                        <div style="margin-bottom: 10px;">
+                            <input type="text" id="sale-clb-search" placeholder="🔍 Tìm VĐV..."
+                                oninput="filterSaleClbList()"
+                                style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 13px; background: var(--card-bg); color: var(--text-color); box-sizing: border-box;">
+                            <div style="display: flex; gap: 6px; margin-top: 8px;">
+                                <button type="button" class="sale-clb-filter-btn active" data-filter="all"
+                                    onclick="setSaleClbFilter('all')"
+                                    style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--primary); background: var(--primary); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;">Tất cả</button>
+                                <button type="button" class="sale-clb-filter-btn" data-filter="active"
+                                    onclick="setSaleClbFilter('active')"
+                                    style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;">Hoạt động</button>
+                                <button type="button" class="sale-clb-filter-btn" data-filter="expired"
+                                    onclick="setSaleClbFilter('expired')"
+                                    style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;">Hết hạn</button>
+                                <button type="button" class="sale-clb-filter-btn" data-filter="frozen"
+                                    onclick="setSaleClbFilter('frozen')"
+                                    style="flex:1; padding: 6px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;">Bảo lưu</button>
+                            </div>
+                        </div>
+                        <div id="sale-clb-list"
+                            style="display: flex; flex-direction: column; gap: 6px; max-height: 600px; overflow-y: auto;">
+                            <div style="text-align:center; padding:30px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Đang tải...</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -574,6 +740,22 @@
                     </div>
                 </div>
 
+                <!-- Nút Chốt Lương -->
+                <div id="teacher-salary-section" style="display: none; margin-bottom: 16px;">
+                    <button onclick="submitSalary()"
+                        style="width:100%; padding:14px 20px; border-radius:10px; border:none; cursor:pointer; font-weight:700; font-size:14px; background:linear-gradient(135deg, #f59e0b, #d97706); color:#fff; box-shadow:0 4px 15px rgba(245,158,11,0.3); display:flex; align-items:center; justify-content:center; gap:8px;">
+                        <i class="fa-solid fa-coins"></i> 💰 Chốt Lương Tháng Này
+                    </button>
+                </div>
+
+                <!-- Nút xem điểm danh hôm nay -->
+                <div style="margin-bottom: 16px;">
+                    <button onclick="window.showTodayAttendance()"
+                        style="width:100%; padding:12px 20px; border-radius:10px; border:1px solid rgba(16,185,129,0.3); cursor:pointer; font-weight:600; font-size:13px; background:rgba(16,185,129,0.08); color:#059669; display:flex; align-items:center; justify-content:center; gap:8px;">
+                        <i class="fa-solid fa-clipboard-check"></i> 📋 HV điểm danh hôm nay
+                    </button>
+                </div>
+
                 <!-- Students Management -->
                 <div class="section-container">
                     <div class="section-header">
@@ -601,6 +783,12 @@
                                 style="font-size: 12px; padding: 6px 12px; border-radius: 20px;">Đang học</button>
                             <button class="btn btn-sm teacher-filter-btn" data-filter="done"
                                 style="font-size: 12px; padding: 6px 12px; border-radius: 20px;">Hoàn thành</button>
+                            <button class="btn btn-sm teacher-filter-btn" data-filter="self"
+                                style="font-size: 12px; padding: 6px 12px; border-radius: 20px;">🏊 Tự tuyển</button>
+                            <button class="btn btn-sm teacher-filter-btn" data-filter="test"
+                                style="font-size: 12px; padding: 6px 12px; border-radius: 20px;">🧪 Test</button>
+                            <button class="btn btn-sm teacher-filter-btn" data-filter="zero"
+                                style="font-size: 12px; padding: 6px 12px; border-radius: 20px;">⚠️ Chưa học</button>
                         </div>
                     </div>
 
@@ -744,6 +932,25 @@
 
             <!-- Khách Hàng Tab -->
             <div id="tab-khachhang" class="tab-content">
+                <!-- Thông tin HĐ đã liên kết -->
+                <div class="section-container" id="kh-linked-section">
+                    <div class="section-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+                        <div>
+                            <h3><i class="fa-solid fa-medal" style="color: #f59e0b;"></i> Hợp Đồng CLB Của Tôi</h3>
+                            <p class="subtitle">Thông tin VĐV CLB đã liên kết với tài khoản của bạn.</p>
+                        </div>
+                        <button onclick="addLinkedContract()" style="padding:8px 16px; border-radius:10px; border:1px solid rgba(16,185,129,0.3); background:rgba(16,185,129,0.1); color:#10b981; font-size:13px; font-weight:600; cursor:pointer;">
+                            <i class="fa-solid fa-plus"></i> Thêm HĐ
+                        </button>
+                    </div>
+                    <div id="kh-linked-cards" style="display:flex; flex-direction:column; gap:12px;">
+                        <div style="text-align:center; padding:30px; color:var(--text-muted);">
+                            <i class="fa-solid fa-spinner fa-spin" style="font-size:20px;"></i> Đang tải...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tra cứu thêm -->
                 <div class="section-container">
                     <div class="section-header">
                         <h3><i class="fa-solid fa-graduation-cap" style="color: #10b981;"></i> Tra Cứu Tiến Trình Học
@@ -751,12 +958,21 @@
                         <p class="subtitle">Nhập tên học viên hoặc số hợp đồng để xem tiến trình giảng dạy.</p>
                     </div>
 
+                    <select id="khachhang-branch" class="modern-select"
+                        style="margin-bottom: 10px; width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-color); font-size: 14px;"
+                        onchange="document.getElementById('khachhang-search').value=''; document.getElementById('khachhang-results').innerHTML='<div style=\'text-align:center;padding:40px;color:var(--text-muted)\'><i class=\'fa-solid fa-search\' style=\'font-size:28px;display:block;margin-bottom:10px\'></i>Nhập tên hoặc số hợp đồng để tra cứu</div>'">
+                        <option value="">-- Chọn cơ sở --</option>
+                    </select>
+
                     <div style="position: relative; margin-bottom: 16px;">
                         <i class="fa-solid fa-search"
                             style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted);"></i>
-                        <input type="text" id="khachhang-search" placeholder="Nhập tên học viên hoặc số hợp đồng..."
+                        <input type="text" id="khachhang-search" placeholder="Nhập tên, số hợp đồng hoặc SĐT..."
                             style="width: 100%; padding: 12px 14px 12px 40px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-color); font-size: 14px;"
                             oninput="searchStudentProgress(this.value)">
+                        <i class="fa-solid fa-xmark" id="khachhang-search-clear"
+                            style="position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); cursor: pointer; display: none; font-size: 16px;"
+                            onclick="document.getElementById('khachhang-search').value=''; this.style.display='none'; searchStudentProgress('');"></i>
                     </div>
 
                     <div id="khachhang-results"
@@ -844,7 +1060,7 @@
                         <div style="position: relative; margin-bottom: 12px;">
                             <i class="fa-solid fa-search"
                                 style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted);"></i>
-                            <input type="text" id="letan-manage-search" placeholder="Tìm tên học viên..."
+                            <input type="text" id="letan-manage-search" placeholder="Tìm tên, SĐT hoặc số hợp đồng..."
                                 style="width: 100%; padding: 10px 14px 10px 40px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-color); font-size: 13px;"
                                 oninput="renderLetanManageTable()">
                         </div>
@@ -852,15 +1068,77 @@
                             <!-- JS Render -->
                         </div>
                     </div>
+
+                    <!-- Lịch sử Điểm danh HV theo ngày -->
+                    <div class="section-container" style="margin-top: 20px;">
+                        <div class="section-header">
+                            <h3><i class="fa-solid fa-calendar-days" style="color: #3b82f6;"></i> Lịch Sử Điểm Danh HV</h3>
+                            <p class="subtitle">Xem danh sách HV đã điểm danh theo ngày.</p>
+                        </div>
+                        <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+                            <input type="date" id="letan-hv-history-date"
+                                style="padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--card-bg); color:var(--text-color); font-size:13px;"
+                                onchange="renderLetanHvHistory(this.value)">
+                            <span id="letan-hv-history-count" style="font-size:12px; color:var(--text-muted);"></span>
+                        </div>
+                        <div id="letan-hv-history-result" style="max-height:500px; overflow-y:auto;">
+                            <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">
+                                <i class="fa-solid fa-calendar-days" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>
+                                Chọn ngày để xem lịch sử điểm danh HV
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Lịch sử Điểm danh CLB theo ngày -->
+                    <div class="section-container" style="margin-top: 20px;">
+                        <div class="section-header">
+                            <h3><i class="fa-solid fa-medal" style="color: #f59e0b;"></i> Lịch Sử Điểm Danh CLB</h3>
+                            <p class="subtitle">Xem danh sách VĐV CLB đã điểm danh theo ngày.</p>
+                        </div>
+                        <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+                            <input type="date" id="letan-clb-history-date"
+                                style="padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--card-bg); color:var(--text-color); font-size:13px;"
+                                onchange="renderLetanClbHistory(this.value)">
+                            <span id="letan-clb-history-count" style="font-size:12px; color:var(--text-muted);"></span>
+                        </div>
+                        <div id="letan-clb-history-result" style="max-height:500px; overflow-y:auto;">
+                            <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">
+                                <i class="fa-solid fa-calendar-days" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>
+                                Chọn ngày để xem lịch sử điểm danh CLB
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Finance Tab -->
+            <div id="tab-finance" class="tab-content">
+                <div class="section-container">
+                    <h3 style="margin-bottom:15px;"><i class="fa-solid fa-coins" style="color:#f59e0b;"></i> Kế Toán —
+                        Bảng Chốt Lương</h3>
+                    <div style="display:flex; gap:10px; margin-bottom:15px; flex-wrap:wrap; align-items:center;">
+                        <select id="finance-month-filter" class="modern-select" onchange="renderFinanceTab()"
+                            style="padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px; width:160px;"></select>
+                        <select id="finance-branch-filter" class="modern-select" onchange="renderFinanceTab()"
+                            style="padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px; width:200px;"></select>
+                        <button onclick="renderFinanceTab()" class="btn btn-sm btn-primary" style="height:36px;"><i
+                                class="fa-solid fa-refresh"></i> Làm mới</button>
+                    </div>
+                    <div id="finance-content"></div>
                 </div>
             </div>
 
             <!-- Admin Tab -->
             <div id="tab-admin" class="tab-content">
                 <div class="section-container">
+                    <div id="btn-admin-change-pw" style="margin-bottom:16px; display:flex; gap:10px; flex-wrap:wrap;">
+                        <button onclick="adminResetUserPassword()" style="padding:10px 18px; border-radius:8px; border:1px solid rgba(245,158,11,0.3); background:rgba(245,158,11,0.1); color:#d97706; font-weight:600; cursor:pointer; font-size:13px;">
+                            <i class="fa-solid fa-key"></i> Đổi mật khẩu user
+                        </button>
+                    </div>
 
                     <!-- 1. Duyệt tài khoản (mở mặc định) -->
-                    <div class="admin-collapse-section" style="margin-bottom: 20px;">
+                    <div class="admin-collapse-section" id="admin-sec-approval" style="margin-bottom: 20px;">
                         <div class="admin-collapse-header" onclick="toggleAdminSection(this)"
                             style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none;">
                             <span class="collapse-arrow" style="font-size:12px; transition:transform 0.2s;">▼</span>
@@ -879,8 +1157,49 @@
                         </div>
                     </div>
 
+                    <!-- 1b. Danh sách tất cả nhân viên -->
+                    <div class="admin-collapse-section" id="admin-sec-all-staff" style="margin-bottom: 20px;">
+                        <div class="admin-collapse-header" onclick="toggleAdminSection(this)"
+                            style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none;">
+                            <span class="collapse-arrow"
+                                style="font-size:12px; transition:transform 0.2s; transform:rotate(-90deg);">▼</span>
+                            <div style="flex:1;">
+                                <h3 style="margin:0; font-size:16px;">👥 Danh sách Tài khoản</h3>
+                                <p class="subtitle" style="margin:4px 0 0; font-size:12px;">Tất cả tài khoản đã được
+                                    duyệt trong hệ thống.</p>
+                            </div>
+                        </div>
+                        <div class="admin-collapse-body" style="display:none; margin-top:10px;">
+                            <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+                                <select id="admin-all-staff-role-filter" onchange="renderAllStaffList()"
+                                    style="padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px; min-width:130px;">
+                                    <option value="">Tất cả vai trò</option>
+                                    <option value="ADMIN">👑 Admin</option>
+                                    <option value="MANAGER">🏢 Quản lý</option>
+                                    <option value="SALE">💼 Sale</option>
+                                    <option value="TEACHER">🏊 Giáo viên</option>
+                                    <option value="LETAN">📋 Lễ tân</option>
+                                    <option value="KETOAN">💰 Kế toán</option>
+                                    <option value="FIRED">🚫 Đã nghỉ</option>
+                                </select>
+                                <div style="position:relative; flex:1; min-width:180px;">
+                                    <i class="fa-solid fa-search"
+                                        style="position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:12px;"></i>
+                                    <input type="text" id="admin-all-staff-search" placeholder="Tìm tên, email..."
+                                        oninput="renderAllStaffList()"
+                                        style="width:100%; padding:8px 12px 8px 32px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-color); color:var(--text-color); font-size:13px; box-sizing:border-box;">
+                                </div>
+                                <span id="admin-all-staff-count"
+                                    style="font-size:12px; color:var(--text-muted); white-space:nowrap;"></span>
+                            </div>
+                            <div id="admin-all-staff-list"
+                                style="display: flex; flex-direction: column; gap: 8px; max-height:600px; overflow-y:auto;">
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- 2. Quản lý Loại GV -->
-                    <div class="admin-collapse-section" style="margin-bottom: 20px;">
+                    <div class="admin-collapse-section" id="admin-sec-staff" style="margin-bottom: 20px;">
                         <div class="admin-collapse-header" onclick="toggleAdminSection(this)"
                             style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none;">
                             <span class="collapse-arrow"
@@ -901,7 +1220,7 @@
                     </div>
 
                     <!-- 3. Nhân sự theo CS + Nút Sync -->
-                    <div class="admin-collapse-section" style="margin-bottom: 20px;">
+                    <div class="admin-collapse-section" id="admin-sec-stats" style="margin-bottom: 20px;">
                         <div class="admin-collapse-header" onclick="toggleAdminSection(this)"
                             style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none;">
                             <span class="collapse-arrow"
@@ -913,7 +1232,15 @@
                             </div>
                             <button onclick="event.stopPropagation(); syncAllStudentsToSheet()" class="btn btn-sm"
                                 style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
-                                <i class="fa-solid fa-cloud-arrow-up"></i> Đồng bộ Sheet
+                                <i class="fa-solid fa-cloud-arrow-up"></i> Đồng bộ HV
+                            </button>
+                            <button onclick="event.stopPropagation(); syncAttendanceToSheet()" class="btn btn-sm"
+                                style="background: rgba(59,130,246,0.15); color: #3b82f6; border: 1px solid rgba(59,130,246,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
+                                <i class="fa-solid fa-clipboard-check"></i> Đồng bộ ĐD
+                            </button>
+                            <button onclick="event.stopPropagation(); stopSyncSheet(); stopAttSync();" class="btn btn-sm"
+                                style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
+                                <i class="fa-solid fa-stop"></i> Dừng
                             </button>
                         </div>
                         <div class="admin-collapse-body" style="display:none; margin-top:10px;">
@@ -924,7 +1251,7 @@
                     </div>
 
                     <!-- 4. Tổng quan theo CS -->
-                    <div class="admin-collapse-section" style="margin-bottom: 20px;">
+                    <div class="admin-collapse-section" id="admin-sec-branch-overview" style="margin-bottom: 20px;">
                         <div class="admin-collapse-header" onclick="toggleAdminSection(this)"
                             style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none;">
                             <span class="collapse-arrow"
@@ -945,7 +1272,7 @@
                     </div>
 
                     <!-- 5. Bảng HV toàn hệ thống -->
-                    <div class="admin-collapse-section" style="margin-bottom: 20px;">
+                    <div class="admin-collapse-section" id="admin-sec-students" style="margin-bottom: 20px;">
                         <div class="admin-collapse-header" onclick="toggleAdminSection(this)"
                             style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none;">
                             <span class="collapse-arrow"
@@ -957,6 +1284,22 @@
                             </div>
                         </div>
                         <div class="admin-collapse-body" style="display:none; margin-top:10px;">
+                            <div
+                                style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+                                <select id="admin-student-branch-filter" onchange="filterAdminStudents()"
+                                    style="padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px; min-width:160px;">
+                                    <option value="">Tất cả cơ sở</option>
+                                </select>
+                                <div style="position:relative; flex:1; min-width:180px;">
+                                    <i class="fa-solid fa-search"
+                                        style="position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:12px;"></i>
+                                    <input type="text" id="admin-student-search" placeholder="Tìm tên, SĐT, số HĐ..."
+                                        oninput="filterAdminStudents()"
+                                        style="width:100%; padding:8px 12px 8px 32px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-color); color:var(--text-color); font-size:13px; box-sizing:border-box;">
+                                </div>
+                                <span id="admin-student-count"
+                                    style="font-size:12px; color:var(--text-muted); white-space:nowrap;"></span>
+                            </div>
                             <div
                                 style="overflow-x: auto; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
                                 <table class="modern-table"
@@ -971,6 +1314,12 @@
                                                 Cơ Sở</th>
                                             <th
                                                 style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                Số HĐ</th>
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                Gói Bơi</th>
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
                                                 Giáo Viên Dạy</th>
                                             <th
                                                 style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
@@ -982,10 +1331,96 @@
                                     </thead>
                                     <tbody id="admin-all-students-tbody">
                                         <tr>
-                                            <td colspan="5"
+                                            <td colspan="7"
                                                 style="text-align:center; padding:20px; color:var(--text-muted);">
                                                 Đang
                                                 tải...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+
+                    <!-- 6. Bảng VĐV CLB KID TL -->
+                    <div class="admin-collapse-section" id="admin-sec-clb-students" style="margin-bottom: 20px;">
+                        <div class="admin-collapse-header" onclick="toggleAdminSection(this)"
+                            style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none;">
+                            <span class="collapse-arrow"
+                                style="font-size:12px; transition:transform 0.2s; transform:rotate(-90deg);">▼</span>
+                            <div style="flex:1;">
+                                <h3 style="margin:0; font-size:16px;">🏅 Hệ Thống Quản Lý VĐV CLB KID TL</h3>
+                                <p class="subtitle" style="margin:4px 0 0; font-size:12px;">Bảng kê toàn bộ VĐV CLB
+                                    đang theo học trên toàn hệ thống.</p>
+                            </div>
+                            <button onclick="event.stopPropagation(); syncClbToSheet()" class="btn btn-sm"
+                                style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
+                                <i class="fa-solid fa-cloud-arrow-up"></i> Đồng bộ CLB Sheet
+                            </button>
+                            <button onclick="event.stopPropagation(); migrateClbCreatorIds()" class="btn btn-sm"
+                                style="background: rgba(234,179,8,0.15); color: #ca8a04; border: 1px solid rgba(234,179,8,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
+                                <i class="fa-solid fa-people-arrows"></i> Đẩy về Sale
+                            </button>
+                            <button onclick="event.stopPropagation(); stopClbSync()" class="btn btn-sm"
+                                style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
+                                <i class="fa-solid fa-stop"></i> Dừng
+                            </button>
+                        </div>
+                        <div class="admin-collapse-body" style="display:none; margin-top:10px;">
+                            <div
+                                style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+                                <select id="admin-clb-branch-filter" onchange="filterAdminClbStudents()"
+                                    style="padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px; min-width:160px;">
+                                    <option value="">Tất cả cơ sở</option>
+                                </select>
+                                <div style="position:relative; flex:1; min-width:180px;">
+                                    <i class="fa-solid fa-search"
+                                        style="position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:12px;"></i>
+                                    <input type="text" id="admin-clb-search" placeholder="Tìm tên, SĐT, số HĐ..."
+                                        oninput="filterAdminClbStudents()"
+                                        style="width:100%; padding:8px 12px 8px 32px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-color); color:var(--text-color); font-size:13px; box-sizing:border-box;">
+                                </div>
+                                <span id="admin-clb-count"
+                                    style="font-size:12px; color:var(--text-muted); white-space:nowrap;"></span>
+                            </div>
+                            <div
+                                style="overflow-x: auto; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                                <table class="modern-table"
+                                    style="width: 100%; border-collapse: collapse; min-width: 800px;">
+                                    <thead>
+                                        <tr style="background: var(--bg-color); text-align: left;">
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                VĐV</th>
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                Cơ Sở</th>
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                Số HĐ</th>
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                Lớp</th>
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                Gói</th>
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                Ngày KH</th>
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                HSD</th>
+                                            <th
+                                                style="padding: 15px; border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                                                Trạng Thái</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-clb-students-tbody">
+                                        <tr>
+                                            <td colspan="8"
+                                                style="text-align:center; padding:20px; color:var(--text-muted);">
+                                                Đang tải...</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -1076,6 +1511,26 @@
                         style="display:grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap:10px; margin-bottom:15px;">
                     </div>
 
+                    <!-- Danh sách VĐV điểm danh hôm nay -->
+                    <div id="clb-today-attendance" style="margin-bottom:15px;"></div>
+
+                    <!-- Lịch sử điểm danh CLB theo ngày -->
+                    <div class="section-container" style="margin-bottom:15px; padding:14px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                            <h4 style="margin:0; font-size:14px; color:var(--text-color);"><i class="fa-solid fa-calendar-days" style="color:#8b5cf6;"></i> Lịch sử điểm danh CLB</h4>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <input type="date" id="clb-history-date" 
+                                    style="padding:6px 10px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px;"
+                                    onchange="renderClbHistoryAttendance(this.value)">
+                                <button onclick="renderClbHistoryAttendance(document.getElementById('clb-history-date').value)" 
+                                    style="border:none; background:rgba(139,92,246,0.12); color:#8b5cf6; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid rgba(139,92,246,0.25);">
+                                    <i class="fa-solid fa-search"></i> Xem
+                                </button>
+                            </div>
+                        </div>
+                        <div id="clb-history-result"></div>
+                    </div>
+
                     <!-- Bộ lọc -->
                     <div style="display:flex; gap:10px; margin-bottom:15px; flex-wrap:wrap; align-items:center;">
                         <select id="clb-filter-class" class="modern-select" onchange="renderClbTable()"
@@ -1101,6 +1556,10 @@
                             <input type="text" id="clb-search" placeholder="Tìm VĐV..." oninput="renderClbTable()"
                                 style="width:100%; padding:8px 12px 8px 36px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px;">
                         </div>
+                        <button onclick="exportClbExcel()" 
+                            style="padding:8px 14px; border-radius:8px; border:1px solid rgba(16,185,129,0.3); background:rgba(16,185,129,0.1); color:#059669; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;">
+                            <i class="fa-solid fa-file-excel"></i> Xuất Excel
+                        </button>
                     </div>
                     <!-- Nút gia hạn + import (Admin only) -->
                     <div id="clb-admin-actions" style="display:none; margin-bottom:15px; gap:10px; flex-wrap:wrap;">
@@ -1108,12 +1567,7 @@
                             style="background:rgba(245,158,11,0.1); color:#d97706; border:1px solid rgba(245,158,11,0.3); padding:8px 16px; font-size:13px;">
                             <i class="fa-solid fa-calendar-plus"></i> Gia hạn nghỉ lễ
                         </button>
-                        <button onclick="document.getElementById('clb-csv-file').click()" class="btn btn-sm"
-                            style="background:rgba(16,185,129,0.1); color:#10b981; border:1px solid rgba(16,185,129,0.3); padding:8px 16px; font-size:13px;">
-                            <i class="fa-solid fa-file-import"></i> Import CSV
-                        </button>
-                        <input type="file" id="clb-csv-file" accept=".csv" style="display:none;"
-                            onchange="importClbCsv(this)">
+
                     </div>
 
                     <!-- Bảng VĐV -->
@@ -1195,7 +1649,8 @@
                     });
                 }
             </script>
-            <script src="app.js?v=4.73"></script>
+            <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+            <script src="app.js?v=6.40"></script>
 </body>
 
 </html>
