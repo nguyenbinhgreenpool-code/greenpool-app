@@ -95,6 +95,120 @@ window.repairAllSessions = async function () {
     }
 };
 
+// ===== BACKUP DỮ LIỆU HỌC VIÊN =====
+window.backupStudentData = async function () {
+    if (!confirm('💾 BACKUP DỮ LIỆU HỌC VIÊN\n\nSẽ lưu toàn bộ dữ liệu HV vào:\n1. Firestore (collection backup)\n2. File JSON (tải về máy)\n\nTiếp tục?')) return;
+
+    try {
+        alert('⏳ Đang backup... Vui lòng đợi.');
+        const stuSnap = await db.collection('students').get();
+        const now = new Date();
+        const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+        const timeStr = now.toTimeString().slice(0, 5).replace(':', '');
+        const backupName = `backup_students_${dateStr}_${timeStr}`;
+
+        // 1. Lưu vào Firestore
+        const batches = [];
+        let batch = db.batch();
+        let count = 0;
+        const allData = [];
+
+        stuSnap.forEach(doc => {
+            const data = doc.data();
+            allData.push({ id: doc.id, ...data });
+
+            batch.set(db.collection(backupName).doc(doc.id), data);
+            count++;
+            if (count % 490 === 0) {
+                batches.push(batch);
+                batch = db.batch();
+            }
+        });
+        if (count % 490 !== 0) batches.push(batch);
+
+        for (const b of batches) await b.commit();
+
+        // 2. Lưu metadata
+        await db.collection('backups').doc(backupName).set({
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            totalStudents: allData.length,
+            collectionName: backupName,
+            note: `Backup ${allData.length} HV lúc ${now.toLocaleString('vi-VN')}`
+        });
+
+        // 3. Tải file JSON
+        const json = JSON.stringify(allData, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${backupName}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+
+        alert(`✅ BACKUP THÀNH CÔNG!\n\n📦 Firestore: ${backupName}\n📄 File JSON: đã tải về máy\n👤 Tổng: ${allData.length} HV\n\n⚠️ Để khôi phục, dùng nút "Restore Backup"`);
+    } catch (e) {
+        alert('❌ Lỗi backup: ' + e.message);
+    }
+};
+
+// ===== RESTORE TỪ BACKUP =====
+window.restoreFromBackup = async function () {
+    try {
+        // Lấy danh sách backup
+        const backupsSnap = await db.collection('backups').orderBy('createdAt', 'desc').limit(10).get();
+        if (backupsSnap.empty) {
+            alert('⚠️ Chưa có bản backup nào!');
+            return;
+        }
+
+        let list = '📦 CHỌN BẢN BACKUP:\n\n';
+        const backups = [];
+        backupsSnap.forEach((doc, i) => {
+            const d = doc.data();
+            backups.push({ id: doc.id, ...d });
+            list += `${backups.length}. ${d.note || doc.id} (${d.totalStudents} HV)\n`;
+        });
+
+        const choice = prompt(list + '\nNhập số (1-' + backups.length + '):');
+        if (!choice) return;
+        const idx = parseInt(choice) - 1;
+        if (idx < 0 || idx >= backups.length) { alert('Số không hợp lệ!'); return; }
+
+        const selected = backups[idx];
+        if (!confirm(`⚠️ KHÔI PHỤC TỪ:\n${selected.note}\n\nSẽ GHI ĐÈ toàn bộ sessions của ${selected.totalStudents} HV!\n\nChắc chắn?`)) return;
+
+        alert('⏳ Đang khôi phục... Vui lòng đợi.');
+        const backupSnap = await db.collection(selected.collectionName).get();
+
+        const batches = [];
+        let batch = db.batch();
+        let count = 0;
+        let restored = 0;
+
+        backupSnap.forEach(doc => {
+            const backupData = doc.data();
+            const ref = db.collection('students').doc(doc.id);
+            // Chỉ restore sessions (không ghi đè toàn bộ)
+            batch.update(ref, { sessions: backupData.sessions || 0 });
+            count++;
+            restored++;
+            if (count % 490 === 0) {
+                batches.push(batch);
+                batch = db.batch();
+            }
+        });
+        if (count % 490 !== 0) batches.push(batch);
+
+        for (const b of batches) await b.commit();
+
+        alert(`✅ KHÔI PHỤC THÀNH CÔNG!\n\n🔄 Đã restore sessions cho ${restored} HV\nTừ: ${selected.note}`);
+        location.reload();
+    } catch (e) {
+        alert('❌ Lỗi restore: ' + e.message);
+    }
+};
+
 // ===== KHÔI PHỤC: Dùng Google Sheet + max sessionNumber attendance =====
 window.restoreWronglyResetStudents = async function () {
     if (!confirm('🚨 KHÔI PHỤC SỐ BUỔI HỌC\n\nNguồn khôi phục:\n1. Google Sheet (cột Số buổi)\n2. Attendance records (sessionNumber cao nhất có ngày)\n3. Chốt lương (tối thiểu 7)\n\n→ Lấy giá trị LỚN NHẤT. Tiếp tục?')) return;
@@ -2221,7 +2335,30 @@ window.editStudentInfo = async function (studentId) {
             }
         }
 
-        alert('✅ Đã cập nhật thông tin!' + (updates.sessions !== undefined && updates.sessions < (st.sessions || 0) ? `\n📋 Đã xoá ${(st.sessions || 0) - updates.sessions} bản ghi điểm danh gần nhất.` : ''));
+        // Auto sync lên Google Sheet (chỉ HV này)
+        try {
+            const updatedDoc = await db.collection('students').doc(studentId).get();
+            const updatedSt = updatedDoc.data();
+            syncToGoogleSheet({
+                action: 'updateOrInsert',
+                data: {
+                    name: updatedSt.name || '',
+                    phone: updatedSt.phone || '',
+                    contractNumber: updatedSt.contractNumber || '',
+                    swimType: updatedSt.swimType || '',
+                    ageGroup: updatedSt.ageGroup || '',
+                    teacherName: updatedSt.teacherName || '',
+                    saleName: updatedSt.saleName || '',
+                    sessions: updatedSt.sessions || 0,
+                    branchName: updatedSt.branchName || '',
+                    contractDate: updatedSt.contractDate || ''
+                }
+            });
+        } catch (syncErr) {
+            console.warn('Sync Sheet sau edit:', syncErr);
+        }
+
+        alert('✅ Đã cập nhật thông tin!' + (updates.sessions !== undefined && updates.sessions < (st.sessions || 0) ? `\n📋 Đã xoá ${(st.sessions || 0) - updates.sessions} bản ghi điểm danh gần nhất.\n📤 Đã sync lên Sheet.` : '\n📤 Đã sync lên Sheet.'));
     } catch (e) {
         alert('Lỗi cập nhật: ' + e.message);
     }

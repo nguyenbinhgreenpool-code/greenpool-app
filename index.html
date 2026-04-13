@@ -1248,6 +1248,14 @@
                                     style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
                                     <i class="fa-solid fa-rotate-left"></i> KP
                                 </button>
+                                <button onclick="event.stopPropagation(); backupStudentData()" class="btn btn-sm"
+                                    style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-database"></i> 💾
+                                </button>
+                                <button onclick="event.stopPropagation(); restoreFromBackup()" class="btn btn-sm"
+                                    style="background: rgba(245,158,11,0.15); color: #d97706; border: 1px solid rgba(245,158,11,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-clock-rotate-left"></i> ↩️
+                                </button>
                                 <button onclick="event.stopPropagation(); stopSyncSheet(); stopAttSync();" class="btn btn-sm"
                                     style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
                                     <i class="fa-solid fa-stop"></i>
