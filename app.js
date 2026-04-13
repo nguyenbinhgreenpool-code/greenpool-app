@@ -3569,9 +3569,9 @@ async function renderSaleClbList() {
             </div>
             ${combo ? `<div style="margin-top:4px; font-size:11px;"><span style="padding:2px 8px; border-radius:10px; background:rgba(16,185,129,0.1); color:#10b981; font-weight:600;">🟢 ${combo}</span></div>` : ''}
             ${a.contractNumber ? `<div style="margin-top:4px; font-size:11px; color:var(--text-muted);">📋 HĐ: ${a.contractNumber} • 🏊 Lớp ${a.athleteClass || 'N/A'}</div>` : ''}
-            ${a.poolPlan ? `<div style="margin-top:6px; padding:6px 10px; background:rgba(59,130,246,0.06); border-radius:6px; border:1px solid rgba(59,130,246,0.15); font-size:12px; color:#3b82f6;">
-                🏊 <strong>PA vào bể:</strong> ${a.poolPlan}
-            </div>` : ''}
+            <div style="margin-top:6px; padding:6px 10px; background:${a.athleteNote ? 'rgba(59,130,246,0.06)' : 'rgba(239,68,68,0.04)'}; border-radius:6px; border:1px solid ${a.athleteNote ? 'rgba(59,130,246,0.15)' : 'rgba(239,68,68,0.15)'}; font-size:12px; cursor:pointer;" onclick="editClbPoolPlan('${a.id}', '${(a.name || '').replace(/'/g, "\\'")}')">
+                🏊 <strong>PA vào bể:</strong> ${a.athleteNote ? `<span style="color:#3b82f6;">${a.athleteNote}</span>` : '<span style="color:#ef4444; font-style:italic;">⚠️ Chưa nhập — bấm để thêm</span>'}
+            </div>
             <div style="margin-top:6px; display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap;">
                 <button onclick="showClbAttHistory('${a.id}', this)" class="btn btn-sm" style="background:rgba(139,92,246,0.1); color:#8b5cf6; font-size:11px; padding:4px 10px; border:1px solid rgba(139,92,246,0.25);">
                     <i class="fa-solid fa-clock-rotate-left"></i> Lịch sử ĐD
@@ -3614,16 +3614,14 @@ window.editClbPoolPlan = async function (athleteId, athleteName) {
         const doc = await db.collection('athletes').doc(athleteId).get();
         if (!doc.exists) return alert('Không tìm thấy VĐV!');
         const data = doc.data();
-        const current = data.poolPlan || '';
+        const current = data.athleteNote || '';
         const newPlan = prompt(
             `🏊 PHƯƠNG ÁN VÀO BỂ\nVĐV: ${athleteName}\n\nNhập phương án (VD: T2-T4-T6 17h30, Bể A...):\n\n(Bỏ trống để xóa)`,
             current
         );
         if (newPlan === null) return;
         await db.collection('athletes').doc(athleteId).update({
-            poolPlan: newPlan.trim(),
-            poolPlanUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            poolPlanUpdatedBy: currentUserDisplayName || currentUserId
+            athleteNote: newPlan.trim()
         });
         alert(`✅ Đã cập nhật PA vào bể cho "${athleteName}"${newPlan.trim() ? '\n🏊 ' + newPlan.trim() : '\n(Đã xóa)'}`);
     } catch (e) {
