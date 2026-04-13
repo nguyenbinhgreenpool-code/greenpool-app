@@ -1,5 +1,436 @@
 // ===================== STATE KHAI BÁO & FIREBASE ===================== //
 // 'db' đã được khởi tạo ở index.html thông qua Firebase CDN
+
+// ===== REPAIR: Đồng bộ sessions + sửa attendance GV bị lệch =====
+// CHỈ sửa khi có attendance records > 0 (không reset HV cũ không có attendance)
+window.repairAllSessions = async function () {
+    if (!confirm('🔧 Kiểm tra và sửa toàn bộ HV:\n\n1. Sessions bị lệch → đếm lại attendance (CHỈ KHI có attendance)\n2. Attendance hiện sai GV (do chuyển nhượng) → cập nhật đúng\n\n⚠️ Không reset HV đã chốt lương hoặc chưa có attendance.')) return;
+    try {
+        const [stuSnap, attSnap, usersSnap] = await Promise.all([
+            db.collection('students').get(),
+            db.collection('attendance').get(),
+            db.collection('users').get()
+        ]);
+
+        const teacherNames = {};
+        usersSnap.forEach(doc => { teacherNames[doc.id] = doc.data().name || ''; });
+
+        const attCount = {};
+        const attByStudent = {};
+        attSnap.forEach(doc => {
+            const d = doc.data();
+            const sid = d.studentId;
+            attCount[sid] = (attCount[sid] || 0) + 1;
+            if (!attByStudent[sid]) attByStudent[sid] = [];
+            attByStudent[sid].push({ ref: doc.ref, teacherId: d.teacherId, teacherName: d.teacherName });
+        });
+
+        let fixedSessions = 0, fixedAtt = 0, skipped = 0;
+        const sessionFixes = [], attFixes = [];
+
+        const sessionBatch = db.batch();
+        stuSnap.forEach(doc => {
+            const s = doc.data();
+            const actual = attCount[doc.id] || 0;
+            const current = s.sessions || 0;
+            
+            // AN TOÀN: CHỈ TĂNG sessions, KHÔNG BAO GIỜ GIẢM
+            // (HV cũ có sessions từ increment, không có attendance records)
+            if (actual > current) {
+                sessionFixes.push(`• "${s.name}": ${current} → ${actual} buổi`);
+                sessionBatch.update(doc.ref, { sessions: actual });
+                fixedSessions++;
+            } else if (actual < current) {
+                skipped++;
+            }
+        });
+        if (fixedSessions > 0) await sessionBatch.commit();
+
+        const attBatches = [];
+        let currentBatch = db.batch();
+        let batchCount = 0;
+
+        stuSnap.forEach(doc => {
+            const s = doc.data();
+            const correctTeacherId = s.assignedTeacherId;
+            const correctTeacherName = teacherNames[correctTeacherId] || '';
+            if (!correctTeacherId || !attByStudent[doc.id]) return;
+
+            attByStudent[doc.id].forEach(att => {
+                if (att.teacherId !== correctTeacherId) {
+                    currentBatch.update(att.ref, {
+                        teacherId: correctTeacherId,
+                        teacherName: correctTeacherName
+                    });
+                    batchCount++;
+                    fixedAtt++;
+                    if (batchCount >= 490) {
+                        attBatches.push(currentBatch);
+                        currentBatch = db.batch();
+                        batchCount = 0;
+                    }
+                }
+            });
+
+            if (fixedAtt > 0 && attFixes.length < 15) {
+                const wrongCount = attByStudent[doc.id].filter(a => a.teacherId !== correctTeacherId).length;
+                if (wrongCount > 0) attFixes.push(`• "${s.name}": ${wrongCount} records → GV ${correctTeacherName}`);
+            }
+        });
+        if (batchCount > 0) attBatches.push(currentBatch);
+        for (const b of attBatches) await b.commit();
+
+        if (fixedSessions === 0 && fixedAtt === 0) {
+            alert(`✅ Tất cả dữ liệu đều chính xác. Không cần sửa!\n(${skipped} HV cũ không có attendance đã bỏ qua)`);
+            return;
+        }
+
+        let msg = `🔧 Đã sửa xong!\n\n`;
+        if (fixedSessions > 0) msg += `📊 Sessions lệch: ${fixedSessions} HV\n${sessionFixes.slice(0, 10).join('\n')}\n\n`;
+        if (fixedAtt > 0) msg += `📋 Attendance sai GV: ${fixedAtt} records\n${attFixes.join('\n')}\n\n`;
+        if (skipped > 0) msg += `⏭️ Bỏ qua ${skipped} HV cũ (không có attendance)`;
+        alert(msg);
+    } catch (e) {
+        alert('Lỗi: ' + e.message);
+    }
+};
+
+// ===== KHÔI PHỤC: Dùng Google Sheet + max sessionNumber attendance =====
+window.restoreWronglyResetStudents = async function () {
+    if (!confirm('🚨 KHÔI PHỤC SỐ BUỔI HỌC\n\nNguồn khôi phục:\n1. Google Sheet (cột Số buổi)\n2. Attendance records (sessionNumber cao nhất có ngày)\n3. Chốt lương (tối thiểu 7)\n\n→ Lấy giá trị LỚN NHẤT. Tiếp tục?')) return;
+
+    try {
+        // 1. Đọc data từ CSV file (user upload)
+        let sheetData = [];
+        try {
+            sheetData = await new Promise((resolve) => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.csv';
+                input.onchange = async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) { resolve([]); return; }
+                    const text = await file.text();
+                    const lines = text.split('\n').filter(l => l.trim());
+                    const result = [];
+                    for (let i = 1; i < lines.length; i++) {
+                        // Parse CSV (handle commas in quotes)
+                        const cols = [];
+                        let current = '';
+                        let inQuotes = false;
+                        for (const ch of lines[i]) {
+                            if (ch === '"') { inQuotes = !inQuotes; }
+                            else if (ch === ',' && !inQuotes) { cols.push(current.trim()); current = ''; }
+                            else { current += ch; }
+                        }
+                        cols.push(current.trim());
+
+                        const contract = (cols[4] || '').trim();
+                        const name = (cols[3] || '').trim();
+
+                        // ĐẾM SỐ CỘT CÓ NGÀY sau cột 10 (Số buổi)
+                        // Cột 11+ là các ngày điểm danh thực tế
+                        let dateCount = 0;
+                        for (let c = 11; c < cols.length; c++) {
+                            const val = (cols[c] || '').trim();
+                            if (val && val.match(/\d+\/\d+/)) {
+                                dateCount++;
+                            }
+                        }
+
+                        // Nếu không có cột ngày → sessions = 0 (chưa điểm danh trong Sheet)
+                        const sessions = dateCount;
+
+                        if (contract) {
+                            result.push({ contract, name, sessions, dateCount, branch: file.name });
+                        }
+                    }
+                    console.log('CSV parsed:', result.length, 'records. Sample:', result.slice(0, 5));
+                    resolve(result);
+                };
+                input.oncancel = () => resolve([]);
+                alert('📁 Chọn file CSV từ Google Sheet.\n\nĐẾM SỐ CỘT NGÀY (không dùng cột Số buổi)\n\nCách tải: Mở Sheet → Tệp → Tải xuống → CSV');
+                input.click();
+            });
+        } catch (sheetErr) {
+            console.warn('CSV read error:', sheetErr);
+        }
+
+        if (sheetData.length === 0) {
+            if (!confirm('⚠️ Không có dữ liệu Sheet.\n\nTiếp tục khôi phục chỉ từ Attendance records?')) return;
+        }        // 2. Đọc students + attendance từ Firestore
+        const [stuSnap, attSnap] = await Promise.all([
+            db.collection('students').get(),
+            db.collection('attendance').get()
+        ]);
+
+        // 3. Tìm max sessionNumber cho mỗi student (chỉ tính buổi có ngày)
+        const maxSessionByStudent = {};
+        const attCountByStudent = {};
+        attSnap.forEach(doc => {
+            const d = doc.data();
+            const sid = d.studentId;
+            const sNum = d.sessionNumber || 0;
+            const hasDate = !!d.createdAt;
+
+            // Đếm tổng attendance records
+            attCountByStudent[sid] = (attCountByStudent[sid] || 0) + 1;
+
+            // Lấy sessionNumber cao nhất (ưu tiên buổi có ngày)
+            if (!maxSessionByStudent[sid] || sNum > maxSessionByStudent[sid]) {
+                maxSessionByStudent[sid] = sNum;
+            }
+        });
+
+        // 4. Map Sheet: contractNumber → sessions
+        const sheetMap = {};
+        sheetData.forEach(item => {
+            const key = item.contract;
+            if (!sheetMap[key] || item.sessions > sheetMap[key].sessions) {
+                sheetMap[key] = item;
+            }
+        });
+
+        alert(`✅ Đọc xong!\n• Sheet: ${sheetData.length} records\n• Attendance: ${attSnap.size} records\n\nĐang so sánh...`);
+
+        // 5. So sánh và tạo danh sách cần sửa
+        const batches = [];
+        let currentBatch = db.batch();
+        let batchCount = 0;
+        let fixed = 0;
+        const fixes = [];
+
+        stuSnap.forEach(doc => {
+            const s = doc.data();
+            const contract = (s.contractNumber || '').trim();
+            const currentSessions = s.sessions || 0;
+            const total = s.totalSessions || 10;
+            const sheetRecord = sheetMap[contract];
+            const maxSN = maxSessionByStudent[doc.id] || 0;
+            const attCount = attCountByStudent[doc.id] || 0;
+
+            let correctSessions = currentSessions;
+            let source = '';
+
+            // Tính từ attendance
+            let attEstimate = Math.max(maxSN, attCount);
+
+            if (sheetRecord) {
+                // CÓ TRONG SHEET → lấy MAX giữa Sheet dates và attendance
+                correctSessions = Math.max(sheetRecord.sessions, attEstimate);
+                source = `Sheet=${sheetRecord.sessions}dates, att=${attEstimate}`;
+            } else if (maxSN === 0 && attCount === 0) {
+                // KHÔNG CÓ SHEET + KHÔNG CÓ ATTENDANCE → chưa học = 0
+                if (currentSessions > 0) {
+                    correctSessions = 0;
+                    source = 'Không att, không Sheet → 0';
+                }
+            } else {
+                // KHÔNG CÓ SHEET nhưng CÓ ATTENDANCE
+                if ((s.salaryConfirmed || s.salarySubmittedMonth) && attEstimate < 7) {
+                    attEstimate = 7;
+                }
+                correctSessions = attEstimate;
+                source = `maxBuổi=${maxSN}, att=${attCount}`;
+            }
+
+            // ĐÃ CHỐT LƯƠNG + KHÔNG CÓ ATTENDANCE → đã học xong = totalSessions
+            if ((s.salaryConfirmed || s.salarySubmittedMonth) && attEstimate === 0) {
+                if (correctSessions < total) {
+                    correctSessions = total;
+                    source += ' + CHỐT LƯƠNG+0att→full';
+                }
+            }
+
+            // Giới hạn không vượt totalSessions
+            correctSessions = Math.min(correctSessions, total);
+
+            // Cần sửa? (CẢ TĂNG VÀ GIẢM nếu có Sheet data)
+            if (correctSessions !== currentSessions) {
+                fixes.push(`• "${s.name}" (${contract}): ${currentSessions} → ${correctSessions} [${source}]`);
+                currentBatch.update(doc.ref, { sessions: correctSessions });
+                batchCount++;
+                fixed++;
+
+                if (batchCount >= 490) {
+                    batches.push(currentBatch);
+                    currentBatch = db.batch();
+                    batchCount = 0;
+                }
+            }
+        });
+
+        if (fixed === 0) {
+            alert(`✅ Không có HV nào cần khôi phục!\n\nĐã kiểm tra ${stuSnap.size} HV.`);
+            return;
+        }
+
+        // Preview
+        let preview = `🚨 SẼ KHÔI PHỤC ${fixed} HV:\n\n`;
+        preview += fixes.slice(0, 20).join('\n');
+        if (fixes.length > 20) preview += `\n... và ${fixes.length - 20} HV khác`;
+        preview += '\n\nBẤM OK ĐỂ ÁP DỤNG';
+
+        if (!confirm(preview)) {
+            alert('❌ Đã huỷ.');
+            return;
+        }
+
+        if (batchCount > 0) batches.push(currentBatch);
+        for (const b of batches) await b.commit();
+
+        alert(`✅ Đã khôi phục ${fixed} HV thành công!`);
+        console.log('RESTORE FULL LIST:', fixes);
+    } catch (e) {
+        console.error('Restore error:', e);
+        alert('Lỗi: ' + e.message);
+    }
+};
+
+// ===== AUDIT: Đối chiếu toàn bộ sessions vs attendance (chi tiết) =====
+window.auditSessionData = async function () {
+    try {
+        const [stuSnap, attSnap, usersSnap] = await Promise.all([
+            db.collection('students').get(),
+            db.collection('attendance').get(),
+            db.collection('users').get()
+        ]);
+        const teacherNames = {};
+        usersSnap.forEach(doc => { teacherNames[doc.id] = doc.data().name || ''; });
+
+        const attCount = {};
+        attSnap.forEach(doc => {
+            const sid = doc.data().studentId;
+            attCount[sid] = (attCount[sid] || 0) + 1;
+        });
+
+        // Phân tích chi tiết
+        let matched = 0, oldStudents = 0, realErrors = 0;
+        const errorDetails = [];
+
+        stuSnap.forEach(doc => {
+            const s = doc.data();
+            const sessions = s.sessions || 0;
+            const attRecords = attCount[doc.id] || 0;
+            const gv = teacherNames[s.assignedTeacherId] || 'Chưa gán';
+
+            if (sessions === attRecords) {
+                matched++;
+            } else if (sessions > attRecords) {
+                // HV cũ: sessions từ increment, không có attendance → OK
+                oldStudents++;
+            } else {
+                // attendance > sessions → LỖI THỰC SỰ
+                realErrors++;
+                errorDetails.push({
+                    name: s.name,
+                    gv: gv,
+                    sessions: sessions,
+                    attendance: attRecords,
+                    diff: attRecords - sessions
+                });
+            }
+        });
+
+        // Tạo báo cáo
+        let report = `📊 KIỂM TRA DỮ LIỆU\n`;
+        report += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        report += `📦 Tổng HV: ${stuSnap.size}\n`;
+        report += `✅ Khớp: ${matched}\n`;
+        report += `⚪ HV cũ (sessions>attendance, OK): ${oldStudents}\n`;
+        report += `❌ Lỗi thực (attendance>sessions): ${realErrors}\n\n`;
+
+        if (realErrors > 0) {
+            report += `CHI TIẾT LỖI:\n`;
+            errorDetails.sort((a, b) => b.diff - a.diff);
+            errorDetails.forEach((d, i) => {
+                report += `${i + 1}. "${d.name}" (GV: ${d.gv}) - sessions=${d.sessions}, điểm danh=${d.attendance}, thiếu ${d.diff} buổi\n`;
+            });
+        } else {
+            report += `✅ KHÔNG CÓ LỖI!`;
+        }
+
+        // Log to console
+        console.log('📊 AUDIT REPORT:', report);
+        console.log('📊 ERRORS:', errorDetails);
+
+        // Show alert
+        let alertMsg = `📊 Tổng: ${stuSnap.size} | ✅ Khớp: ${matched} | ⚪ HV cũ OK: ${oldStudents} | ❌ Lỗi: ${realErrors}\n`;
+        if (realErrors > 0) {
+            alertMsg += `\nHV cần sửa (attendance > sessions):\n`;
+            errorDetails.slice(0, 20).forEach((d, i) => {
+                alertMsg += `${i + 1}. "${d.name}" (${d.gv}) ${d.sessions}→${d.attendance}\n`;
+            });
+            if (errorDetails.length > 20) alertMsg += `... và ${errorDetails.length - 20} HV khác`;
+        } else {
+            alertMsg += `\n✅ Không có lỗi thực sự! HV cũ (sessions>att) là bình thường.`;
+        }
+        alert(alertMsg);
+    } catch (e) {
+        alert('Lỗi: ' + e.message);
+    }
+};
+window.reportDataHealth = async function () {
+    try {
+        const [stuSnap, attSnap, usersSnap] = await Promise.all([
+            db.collection('students').get(),
+            db.collection('attendance').get(),
+            db.collection('users').get()
+        ]);
+        const teacherNames = {};
+        usersSnap.forEach(doc => { teacherNames[doc.id] = doc.data().name || ''; });
+
+        const attCount = {}, attByStudent = {};
+        attSnap.forEach(doc => {
+            const d = doc.data(); const sid = d.studentId;
+            attCount[sid] = (attCount[sid] || 0) + 1;
+            if (!attByStudent[sid]) attByStudent[sid] = [];
+            attByStudent[sid].push({ teacherId: d.teacherId, teacherName: d.teacherName });
+        });
+
+        let report = `📊 BÁO CÁO SỨC KHỎE DỮ LIỆU\n`;
+        report += `━━━━━━━━━━━━━━━━━━\n`;
+        report += `📦 Tổng HV: ${stuSnap.size}\n`;
+        report += `📋 Tổng records điểm danh: ${attSnap.size}\n\n`;
+
+        let sessErr = 0, attErr = 0;
+        let sessList = [], attList = [];
+
+        stuSnap.forEach(doc => {
+            const s = doc.data();
+            const actual = attCount[doc.id] || 0;
+            const current = s.sessions || 0;
+            if (actual !== current) {
+                sessList.push(`  • "${s.name}": hiện ${current}, thực tế ${actual} buổi`);
+                sessErr++;
+            }
+            const tid = s.assignedTeacherId;
+            if (tid && attByStudent[doc.id]) {
+                const wrong = attByStudent[doc.id].filter(a => a.teacherId !== tid);
+                if (wrong.length > 0) {
+                    const wrongGVs = [...new Set(wrong.map(r => r.teacherName))].join(', ');
+                    attList.push(`  • "${s.name}": GV đúng = ${teacherNames[tid]}, ${wrong.length}/${attByStudent[doc.id].length} records đang ghi sai (${wrongGVs})`);
+                    attErr++;
+                }
+            }
+        });
+
+        if (sessErr === 0 && attErr === 0) {
+            report += '✅ TẤT CẢ DỮ LIỆU CHÍNH XÁC!\nKhông có lỗi nào.';
+        } else {
+            if (sessErr > 0) {
+                report += `❌ Sessions lệch: ${sessErr} HV\n${sessList.join('\n')}\n\n`;
+            }
+            if (attErr > 0) {
+                report += `❌ Attendance sai GV: ${attErr} HV\n${attList.join('\n')}`;
+            }
+            report += `\n\n→ Bấm nút 🔧 Sửa để tự động sửa.`;
+        }
+        alert(report);
+    } catch (e) {
+        alert('Lỗi: ' + e.message);
+    }
+};
 let auth = null;
 let currentBranchId = null;
 let currentUserId = null;
@@ -1420,7 +1851,13 @@ function renderTeacherStudents() {
         const statusDot = isDone ? '🔴' : '🟢';
         const saleName = st.creatorId ? (saleMap[st.creatorId] || 'Sale ẩn') : '';
         const contractNum = st.contractNumber || '';
-        const canConfirmSalary = st.sessions >= 7;
+        // Điều kiện chốt lương: Bơi ≥7 buổi, Dolphin 1 ≥3/4, Dolphin 2 ≥4/5, Lặn khác ≥ tổng-1
+        let canConfirmSalary = st.sessions >= 7;
+        if (isDivingCurriculum(curType)) {
+            if (curType === 'Dolphin 1') canConfirmSalary = st.sessions >= 3;
+            else if (curType === 'Dolphin 2') canConfirmSalary = st.sessions >= 4;
+            else canConfirmSalary = st.sessions >= (total - 1);
+        }
         const isSalaryConfirmed = st.salaryConfirmed || false;
         const saleOk = st.saleConfirmed === true;
         const salaryMonth = st.salarySubmittedMonth || '';
@@ -1869,6 +2306,27 @@ window.transferStudent = async function (studentId, studentName, currentTeacherI
             transferredAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
+        // Cập nhật TẤT CẢ attendance records sang GV mới
+        let attUpdated = 0;
+        try {
+            const attSnap = await db.collection('attendance')
+                .where('studentId', '==', studentId)
+                .get();
+            if (!attSnap.empty) {
+                const batch = db.batch();
+                attSnap.forEach(doc => {
+                    batch.update(doc.ref, {
+                        teacherId: newTeacher.id,
+                        teacherName: newTeacher.name
+                    });
+                });
+                await batch.commit();
+                attUpdated = attSnap.size;
+            }
+        } catch (attErr) {
+            console.warn('Lỗi cập nhật attendance khi chuyển GV:', attErr);
+        }
+
         // Gửi thông báo cho GV nhận
         await db.collection('notifications').add({
             toUserId: newTeacher.id,
@@ -1878,7 +2336,7 @@ window.transferStudent = async function (studentId, studentName, currentTeacherI
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        alert(`✅ Đã chuyển nhượng "${studentName}" cho ${newTeacher.name} thành công!`);
+        alert(`✅ Đã chuyển nhượng "${studentName}" cho ${newTeacher.name} thành công!${attUpdated > 0 ? `\n📋 Đã cập nhật ${attUpdated} bản ghi điểm danh` : ''}`);
     } catch (e) {
         console.error(e);
         alert('Lỗi: ' + e.message);
@@ -4951,7 +5409,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tabs.forEach(t => t.style.display = 'flex'); // Reset all
 
         // Gán class role vào body để CSS có thể ẩn/hiện phần tử theo quyền
-        document.body.classList.remove('role-admin', 'role-sale', 'role-teacher', 'role-manager', 'role-letan', 'role-ketoan');
+        document.body.classList.remove('role-admin', 'role-sale', 'role-teacher', 'role-manager', 'role-letan', 'role-ketoan', 'role-viewer');
         document.body.classList.add('role-' + role.toLowerCase());
 
         // Hide Admin + Letan + CLB + SaleStats tab default
@@ -5038,6 +5496,35 @@ document.addEventListener('DOMContentLoaded', () => {
             listenToAthletes();
             renderLetanClbSection();
             initFinanceFilters();
+        } else if (role === 'VIEWER') {
+            // VIEWER: Xem tất cả như Admin nhưng không chỉnh sửa, không xem TK
+            if (adminTab) adminTab.style.display = 'flex';
+            if (letanTab) letanTab.style.display = 'flex';
+            if (clbTab) clbTab.style.display = 'flex';
+            if (saleStatsTab) saleStatsTab.style.display = 'flex';
+            if (financeTab) financeTab.style.display = 'flex';
+            document.querySelector('[data-tab="dashboard"]').click();
+            loadAdminClbStudents();
+            listenToAthletes();
+            renderLetanClbSection();
+            initFinanceFilters();
+            // Load data cho các section admin (trừ TK)
+            loadAdminStaffStats();
+            loadAdminDetailedOverview();
+            // Ẩn phần Quản trị & Phân quyền + Danh sách TK + Đổi MK
+            const secApproval = document.getElementById('admin-sec-approval');
+            if (secApproval) secApproval.style.display = 'none';
+            const secAllStaff = document.getElementById('admin-sec-all-staff');
+            if (secAllStaff) secAllStaff.style.display = 'none';
+            const btnChangePw = document.getElementById('btn-admin-change-pw');
+            if (btnChangePw) btnChangePw.style.display = 'none';
+            // Ẩn form nhập HĐ Sale + CLB
+            const saleForm = document.getElementById('form-sale-add');
+            if (saleForm) saleForm.closest('.section-container').style.display = 'none';
+            const saleClbSec = document.getElementById('sale-clb-section');
+            if (saleClbSec) saleClbSec.style.display = 'none';
+            const salePenalty = document.getElementById('sale-penalty-buttons');
+            if (salePenalty) salePenalty.style.display = 'none';
         } else if (role === 'MANAGER') {
             // MANAGER: Xem tất cả tab + chỉnh sửa giống Admin nhưng chỉ cơ sở của mình
             if (adminTab) adminTab.style.display = 'flex';
@@ -5782,7 +6269,8 @@ async function initFixedBranches() {
     // Nếu là ADMIN -> Cho phép thấy toàn bộ cơ sở (trừ tạm dừng trong dropdown)
     // Nếu là SALE/TEACHER -> Chỉ Filter lại đúng Cơ sở được cấp quyền
     const activeBranches = FIXED_BRANCHES.filter(b => !b.paused);
-    if (currentUserRole === 'ADMIN' || currentUserRole === 'KETOAN') {
+    const isChiefAccountant = currentUserRole === 'KETOAN' && window._currentUserData?.isChiefAccountant;
+    if (currentUserRole === 'ADMIN' || currentUserRole === 'VIEWER' || isChiefAccountant) {
         localState.branches = activeBranches;
     } else {
         localState.branches = activeBranches.filter(b => b.id === currentUserBranchId);
@@ -5803,8 +6291,9 @@ async function initFixedBranches() {
         branchSelect.appendChild(opt);
     });
 
-    // Nếu không phải ADMIN/KETOAN thì Disable tính năng chọn cơ sở luôn để giao diện là tĩnh
-    if (currentUserRole !== 'ADMIN' && currentUserRole !== 'KETOAN') {
+    // Nếu không phải ADMIN/KT trưởng/VIEWER thì Disable tính năng chọn cơ sở
+    const canSwitchBranch = currentUserRole === 'ADMIN' || currentUserRole === 'VIEWER' || isChiefAccountant;
+    if (!canSwitchBranch) {
         branchSelect.disabled = true;
     } else {
         branchSelect.disabled = false;
@@ -7152,7 +7641,7 @@ function loadAdminUsers() {
                             <div style="font-size: 13px; color: var(--text-muted);">${u.email}</div>
                         </div>
                         <div style="display:flex; gap:10px; align-items:center; flex-wrap: wrap;">
-                            <select id="role-select-${doc.id}" class="modern-select" style="padding: 6px 12px; width: 140px; height: 36px; border-radius: 6px; font-size: 13px;">
+                            <select id="role-select-${doc.id}" class="modern-select" style="padding: 6px 12px; width: 140px; height: 36px; border-radius: 6px; font-size: 13px;" onchange="var bs=document.getElementById('branch-select-${doc.id}'); var cb=document.getElementById('chief-cb-${doc.id}'); if(bs) bs.style.display=this.value==='VIEWER'?'none':''; if(cb) cb.style.display=this.value==='KETOAN'?'flex':'none';">
                                 <option value="PENDING" ${u.role === 'PENDING' ? 'selected' : ''}>⏳ Chờ duyệt</option>
                                 <option value="SALE" ${u.role === 'SALE' ? 'selected' : ''}>💼 Sale</option>
                                 <option value="TEACHER" ${u.role === 'TEACHER' ? 'selected' : ''}>🏊 Giáo Viên</option>
@@ -7160,9 +7649,14 @@ function loadAdminUsers() {
                                 <option value="LETAN" ${u.role === 'LETAN' ? 'selected' : ''}>📋 Lễ Tân</option>
                                 <option value="KETOAN" ${u.role === 'KETOAN' ? 'selected' : ''}>💰 Kế Toán</option>
                                 <option value="ADMIN" ${u.role === 'ADMIN' ? 'selected' : ''}>👑 Admin</option>
+                                <option value="VIEWER" ${u.role === 'VIEWER' ? 'selected' : ''}>👁️ Giám sát</option>
                             </select>
                             
-                            <select id="branch-select-${doc.id}" class="modern-select" style="padding: 6px 12px; width: 150px; height: 36px; border-radius: 6px; font-size: 13px;">
+                            <label id="chief-cb-${doc.id}" style="display:${u.role === 'KETOAN' ? 'flex' : 'none'}; align-items:center; gap:5px; font-size:12px; color:var(--text-muted); cursor:pointer; white-space:nowrap;">
+                                <input type="checkbox" id="chief-check-${doc.id}" ${u.isChiefAccountant ? 'checked' : ''} style="accent-color:#ec4899;"> KT Trưởng
+                            </label>
+
+                            <select id="branch-select-${doc.id}" class="modern-select" style="padding: 6px 12px; width: 150px; height: 36px; border-radius: 6px; font-size: 13px; ${u.role === 'VIEWER' ? 'display:none;' : ''}">
                                 ${userBranchOpts}
                             </select>
 
@@ -7191,11 +7685,9 @@ function loadAdminUsers() {
 let _allStaffDocs = [];
 let allStaffUnsub = null;
 function loadAllStaff() {
-    if (allStaffUnsub) allStaffUnsub();
-    allStaffUnsub = db.collection('users').where('role', '!=', 'PENDING').onSnapshot(snap => {
-        _allStaffDocs = snap.docs;
-        renderAllStaffList();
-    });
+    // Data cập nhật từ loadAdminStaffStats() qua biến _allStaffDocs
+    // Không cần listener riêng nữa
+    if (_allStaffDocs.length > 0) renderAllStaffList();
 }
 
 const ROLE_LABELS = {
@@ -7205,6 +7697,7 @@ const ROLE_LABELS = {
     'TEACHER': '🏊 Giáo viên',
     'LETAN': '📋 Lễ tân',
     'KETOAN': '💰 Kế toán',
+    'VIEWER': '👁️ Giám sát',
     'FIRED': '🚫 Đã nghỉ'
 };
 
@@ -7215,6 +7708,7 @@ const ROLE_COLORS = {
     'TEACHER': '#3b82f6',
     'LETAN': '#10b981',
     'KETOAN': '#ec4899',
+    'VIEWER': '#6366f1',
     'FIRED': '#6b7280'
 };
 
@@ -7238,7 +7732,7 @@ window.renderAllStaffList = function () {
     });
 
     // Sort: ADMIN first, then by name
-    const roleOrder = ['ADMIN', 'MANAGER', 'KETOAN', 'SALE', 'TEACHER', 'LETAN', 'FIRED'];
+    const roleOrder = ['ADMIN', 'VIEWER', 'MANAGER', 'KETOAN', 'SALE', 'TEACHER', 'LETAN', 'FIRED'];
     filtered.sort((a, b) => {
         const ra = roleOrder.indexOf(a.data().role);
         const rb = roleOrder.indexOf(b.data().role);
@@ -7276,7 +7770,8 @@ window.renderAllStaffList = function () {
             </div>
             <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                 <span style="font-size:11px; padding:3px 10px; border-radius:20px; font-weight:600; background:${roleColor}15; color:${roleColor}; border:1px solid ${roleColor}30;">${roleLabel}</span>
-                <span style="font-size:11px; color:var(--text-muted);">${branchName}</span>
+                ${u.role === 'KETOAN' && u.isChiefAccountant ? '<span style="font-size:10px; padding:2px 8px; border-radius:12px; font-weight:600; background:rgba(236,72,153,0.15); color:#ec4899; border:1px solid rgba(236,72,153,0.3);">KT Trưởng</span>' : ''}
+                ${u.role !== 'VIEWER' && !(u.role === 'KETOAN' && u.isChiefAccountant) ? `<span style="font-size:11px; color:var(--text-muted);">${branchName}</span>` : ''}
                 ${canEdit ? `
                 <select id="staff-role-${doc.id}" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:11px;">
                     <option value="SALE" ${u.role === 'SALE' ? 'selected' : ''}>💼 Sale</option>
@@ -7285,9 +7780,10 @@ window.renderAllStaffList = function () {
                     <option value="LETAN" ${u.role === 'LETAN' ? 'selected' : ''}>📋 Lễ tân</option>
                     <option value="KETOAN" ${u.role === 'KETOAN' ? 'selected' : ''}>💰 KT</option>
                     <option value="ADMIN" ${u.role === 'ADMIN' ? 'selected' : ''}>👑 Admin</option>
+                    <option value="VIEWER" ${u.role === 'VIEWER' ? 'selected' : ''}>👁️ Giám sát</option>
                     <option value="FIRED" ${u.role === 'FIRED' ? 'selected' : ''}>🚫 Nghỉ</option>
                 </select>
-                <select id="staff-branch-${doc.id}" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:11px;">
+                <select id="staff-branch-${doc.id}" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:11px; ${u.role === 'VIEWER' ? 'display:none;' : ''}">
                     ${branchOpts}
                 </select>
                 <button onclick="updateStaffRole('${doc.id}', '${u.name?.replace(/'/g, "\\\\'") || ''}')" style="padding:4px 10px; border-radius:6px; border:1px solid rgba(59,130,246,0.3); background:rgba(59,130,246,0.1); color:#3b82f6; font-size:11px; font-weight:600; cursor:pointer;">Lưu</button>
@@ -7301,10 +7797,16 @@ window.updateStaffRole = async function (userId, userName) {
     if (!isSuperAdmin) return alert('⚠️ Chỉ Admin chính mới có quyền thay đổi!');
     const newRole = document.getElementById(`staff-role-${userId}`)?.value;
     const newBranch = document.getElementById(`staff-branch-${userId}`)?.value;
-    if (!newRole || !newBranch) return;
-    if (!confirm(`Cập nhật "${userName}":\n→ Vai trò: ${ROLE_LABELS[newRole] || newRole}\n→ Cơ sở: ${FIXED_BRANCHES.find(b => b.id === newBranch)?.name || newBranch}`)) return;
+    if (!newRole) return;
+    const branchLabel = FIXED_BRANCHES.find(b => b.id === newBranch)?.name || newBranch;
+    const confirmMsg = newRole === 'VIEWER' 
+        ? `Cập nhật "${userName}":\n→ Vai trò: ${ROLE_LABELS[newRole] || newRole}\n→ Xem tất cả cơ sở`
+        : `Cập nhật "${userName}":\n→ Vai trò: ${ROLE_LABELS[newRole] || newRole}\n→ Cơ sở: ${branchLabel}`;
+    if (!confirm(confirmMsg)) return;
     try {
-        await db.collection('users').doc(userId).update({ role: newRole, branchId: newBranch });
+        const updateData = { role: newRole, branchId: newRole === 'VIEWER' ? '' : (newBranch || '') };
+        // Không cần isChiefAccountant cho staff list vì đã xử lý ở approval
+        await db.collection('users').doc(userId).update(updateData);
         alert(`✅ Đã cập nhật quyền cho "${userName}"!`);
     } catch (e) {
         alert('Lỗi: ' + e.message);
@@ -7315,6 +7817,14 @@ let adminStatsUnsub = null;
 function loadAdminStaffStats() {
     if (adminStatsUnsub) adminStatsUnsub();
     adminStatsUnsub = db.collection('users').onSnapshot(async snap => {
+        // Feed data cho Danh sách Tài khoản (gộp listener)
+        _allStaffDocs = snap.docs.filter(doc => doc.data().role !== 'PENDING');
+        renderAllStaffList();
+        // Feed data cho Admin Detailed Overview
+        if (typeof window._updateDetailedOverviewUsers === 'function') {
+            window._updateDetailedOverviewUsers(snap.docs);
+        }
+
         const statsArea = document.getElementById('admin-staff-stats');
         const teacherTypeList = document.getElementById('admin-teacher-type-list');
         if (!statsArea) return;
@@ -7878,9 +8388,12 @@ window.updateUserRole = async function (userId) {
             }
         }
 
+        const isChief = newRole === 'KETOAN' && document.getElementById(`chief-check-${userId}`)?.checked;
+
         await db.collection('users').doc(userId).update({
             role: newRole,
-            branchId: newBranchId
+            branchId: newRole === 'VIEWER' ? '' : newBranchId,
+            isChiefAccountant: isChief
         });
 
         // NẾU DUYỆT LÀ GIÁO VIÊN -> TỰ ĐỘNG ĐẨY VÀO QUEUE MẶC ĐỊNH LÀ CTV
@@ -8030,10 +8543,16 @@ function loadAdminDetailedOverview() {
     let penaltiesData = [];
     let clbAthletesData = [];
 
-    adminDetailedUnsubUsers = db.collection('users').onSnapshot(snapUsers => {
-        usersData = snapUsers.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // Dùng chung data users từ _allStaffDocs (loadAdminStaffStats listener)
+    // Cập nhật thông qua hàm global
+    window._updateDetailedOverviewUsers = function(docs) {
+        usersData = docs.map(doc => ({ id: doc.id, ...doc.data() }));
         processOverview();
-    });
+    };
+    // Trigger initial nếu đã có data
+    if (_allStaffDocs.length > 0) {
+        usersData = _allStaffDocs.map(doc => ({ id: doc.id, ...doc.data() }));
+    }
 
     adminDetailedUnsubStudents = db.collection('students').onSnapshot(snapStudents => {
         studentsData = snapStudents.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -10680,21 +11199,27 @@ window.submitSalary = async function () {
                     notEligible.push({ name: s.name, reasons: [`PT chưa đủ 50% (${sessions}/${total}, cần ≥${halfTotal})`] });
                 }
             } else {
-                // Gói thường: >= 7 buổi + hoàn thành tiến trình
+                // Gói thường hoặc Lặn
                 if (alreadySubmittedIds.has(doc.id)) return;
-                const min7 = sessions >= 7;
+                let minSessions = 7; // Bơi: ≥7 buổi
+                const cur = s.curriculum || '';
+                if (isDivingCurriculum(cur)) {
+                    if (cur === 'Dolphin 1') minSessions = 3;
+                    else if (cur === 'Dolphin 2') minSessions = 4;
+                    else minSessions = Math.max(1, total - 1);
+                }
 
-                if (min7) {
+                if (sessions >= minSessions) {
                     eligible.push({ studentId: doc.id, ...s });
                 } else {
-                    notEligible.push({ name: s.name, reasons: [`dưới 7 buổi (${sessions}/${total})`] });
+                    notEligible.push({ name: s.name, reasons: [`chưa đủ buổi (${sessions}/${total}, cần ≥${minSessions})`] });
                 }
             }
         });
 
         if (eligible.length === 0) {
             let msg = `❌ Không có HV nào đủ điều kiện chốt lương ${monthLabel}.\n\n`;
-            msg += `Điều kiện:\n  • Gói thường: Tối thiểu 7 buổi\n  • Gói PT: Đã dạy ≥ 50% khóa\n\n`;
+            msg += `Điều kiện:\n  • Gói Bơi: Tối thiểu 7 buổi\n  • Dolphin 1: 3/4 buổi\n  • Dolphin 2: 4/5 buổi\n  • Gói PT: Đã dạy ≥ 50% khóa\n\n`;
             if (notEligible.length > 0) {
                 msg += 'HV chưa đủ:\n';
                 notEligible.slice(0, 5).forEach(ne => {

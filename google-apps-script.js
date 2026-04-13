@@ -7,10 +7,70 @@
 // 4. Bấm "Triển khai" → "Quản lý triển khai" → Chỉnh sửa → Phiên bản mới → Triển khai
 // ============================================================
 
+// ========== ĐỌC DATA TỪ SHEET (doGet - JSONP) ==========
+function doGet(e) {
+    try {
+        const callback = (e && e.parameter && e.parameter.callback) || 'handleSheetData';
+        const ss = SpreadsheetApp.getActiveSpreadsheet();
+        const sheets = ss.getSheets();
+        const result = [];
+
+        sheets.forEach(sheet => {
+            const name = sheet.getName();
+            if (name === 'HocVien' || name === 'Template') return;
+            const lastRow = sheet.getLastRow();
+            if (lastRow <= 1) return;
+            const data = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
+            data.forEach(row => {
+                const contractNumber = (row[4] || '').toString().trim();
+                const studentName = (row[3] || '').toString().trim();
+                const sessions = parseInt(row[10]) || 0;
+                if (contractNumber) {
+                    result.push({ contract: contractNumber, name: studentName, sessions: sessions, branch: name });
+                }
+            });
+        });
+
+        // Trả về JSONP (bypass CORS)
+        return ContentService.createTextOutput(
+            callback + '(' + JSON.stringify({ status: 'ok', data: result }) + ')'
+        ).setMimeType(ContentService.MimeType.JAVASCRIPT);
+    } catch (err) {
+        const callback = (e && e.parameter && e.parameter.callback) || 'handleSheetData';
+        return ContentService.createTextOutput(
+            callback + '(' + JSON.stringify({ status: 'error', message: err.toString() }) + ')'
+        ).setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+}
+
 function doPost(e) {
     try {
         const data = JSON.parse(e.postData.contents);
         const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+        // ========== ĐỌC SỐ BUỔI (readSessions) ==========
+        if (data.action === 'readSessions') {
+            const sheets = ss.getSheets();
+            const result = [];
+            sheets.forEach(sheet => {
+                const name = sheet.getName();
+                if (name === 'HocVien' || name === 'Template') return;
+                const lastRow = sheet.getLastRow();
+                if (lastRow <= 1) return;
+                const rows = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
+                rows.forEach(row => {
+                    const contractNumber = (row[4] || '').toString().trim();
+                    const studentName = (row[3] || '').toString().trim();
+                    const sessions = parseInt(row[10]) || 0;
+                    if (contractNumber) {
+                        result.push({ contract: contractNumber, name: studentName, sessions: sessions, branch: name });
+                    }
+                });
+            });
+            return ContentService.createTextOutput(
+                JSON.stringify({ status: 'ok', data: result })
+            ).setMimeType(ContentService.MimeType.JSON);
+        }
 
         // ========== XOÁ TAB (clearBranch) ==========
         if (data.action === 'clearBranch') {

@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
     <link rel="apple-touch-icon" href="icon-192.png">
     <title>Quản Lý Học Viên Bơi Lặn</title>
-    <link rel="stylesheet" href="styles.css?v=5.76">
+    <link rel="stylesheet" href="styles.css?v=6.52">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -1180,6 +1180,7 @@
                                     <option value="TEACHER">🏊 Giáo viên</option>
                                     <option value="LETAN">📋 Lễ tân</option>
                                     <option value="KETOAN">💰 Kế toán</option>
+                                    <option value="VIEWER">👁️ Giám sát</option>
                                     <option value="FIRED">🚫 Đã nghỉ</option>
                                 </select>
                                 <div style="position:relative; flex:1; min-width:180px;">
@@ -1222,26 +1223,36 @@
                     <!-- 3. Nhân sự theo CS + Nút Sync -->
                     <div class="admin-collapse-section" id="admin-sec-stats" style="margin-bottom: 20px;">
                         <div class="admin-collapse-header" onclick="toggleAdminSection(this)"
-                            style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none;">
+                            style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none; flex-wrap:wrap;">
                             <span class="collapse-arrow"
-                                style="font-size:12px; transition:transform 0.2s; transform:rotate(-90deg);">▼</span>
-                            <div style="flex:1;">
-                                <h3 style="margin:0; font-size:16px;">📊 Thống kê Nhân sự & Học viên</h3>
-                                <p class="subtitle" style="margin:4px 0 0; font-size:12px;">Số lượng GV, Sale, HV tại
-                                    từng cơ sở.</p>
+                                style="font-size:12px; transition:transform 0.2s; transform:rotate(-90deg); margin-top:4px;">▼</span>
+                            <div style="flex:1; min-width:150px;">
+                                <h3 style="margin:0; font-size:16px;">📊 Thống kê Nhân sự & HV</h3>
+                                <p class="subtitle" style="margin:4px 0 0; font-size:12px;">GV, Sale, HV tại từng cơ sở.</p>
                             </div>
-                            <button onclick="event.stopPropagation(); syncAllStudentsToSheet()" class="btn btn-sm"
-                                style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
-                                <i class="fa-solid fa-cloud-arrow-up"></i> Đồng bộ HV
-                            </button>
-                            <button onclick="event.stopPropagation(); syncAttendanceToSheet()" class="btn btn-sm"
-                                style="background: rgba(59,130,246,0.15); color: #3b82f6; border: 1px solid rgba(59,130,246,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
-                                <i class="fa-solid fa-clipboard-check"></i> Đồng bộ ĐD
-                            </button>
-                            <button onclick="event.stopPropagation(); stopSyncSheet(); stopAttSync();" class="btn btn-sm"
-                                style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
-                                <i class="fa-solid fa-stop"></i> Dừng
-                            </button>
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                <button onclick="event.stopPropagation(); syncAllStudentsToSheet()" class="btn btn-sm"
+                                    style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-cloud-arrow-up"></i> HV
+                                </button>
+                                <button onclick="event.stopPropagation(); syncAttendanceToSheet()" class="btn btn-sm"
+                                    style="background: rgba(59,130,246,0.15); color: #3b82f6; border: 1px solid rgba(59,130,246,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-clipboard-check"></i> ĐD
+                                </button>
+
+                                <button onclick="event.stopPropagation(); auditSessionData()" class="btn btn-sm"
+                                    style="background: rgba(14,165,233,0.15); color: #0ea5e9; border: 1px solid rgba(14,165,233,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-magnifying-glass-chart"></i> KT
+                                </button>
+                                <button onclick="event.stopPropagation(); restoreWronglyResetStudents()" class="btn btn-sm"
+                                    style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-rotate-left"></i> KP
+                                </button>
+                                <button onclick="event.stopPropagation(); stopSyncSheet(); stopAttSync();" class="btn btn-sm"
+                                    style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-stop"></i>
+                                </button>
+                            </div>
                         </div>
                         <div class="admin-collapse-body" style="display:none; margin-top:10px;">
                             <div class="admin-staff-stats" id="admin-staff-stats"
@@ -1346,26 +1357,27 @@
                     <!-- 6. Bảng VĐV CLB KID TL -->
                     <div class="admin-collapse-section" id="admin-sec-clb-students" style="margin-bottom: 20px;">
                         <div class="admin-collapse-header" onclick="toggleAdminSection(this)"
-                            style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none;">
+                            style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; padding:14px 18px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; user-select:none; flex-wrap:wrap;">
                             <span class="collapse-arrow"
-                                style="font-size:12px; transition:transform 0.2s; transform:rotate(-90deg);">▼</span>
-                            <div style="flex:1;">
-                                <h3 style="margin:0; font-size:16px;">🏅 Hệ Thống Quản Lý VĐV CLB KID TL</h3>
-                                <p class="subtitle" style="margin:4px 0 0; font-size:12px;">Bảng kê toàn bộ VĐV CLB
-                                    đang theo học trên toàn hệ thống.</p>
+                                style="font-size:12px; transition:transform 0.2s; transform:rotate(-90deg); margin-top:4px;">▼</span>
+                            <div style="flex:1; min-width:150px;">
+                                <h3 style="margin:0; font-size:16px;">🏅 QL VĐV CLB TL KID</h3>
+                                <p class="subtitle" style="margin:4px 0 0; font-size:12px;">Toàn bộ VĐV CLB trên hệ thống.</p>
                             </div>
-                            <button onclick="event.stopPropagation(); syncClbToSheet()" class="btn btn-sm"
-                                style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
-                                <i class="fa-solid fa-cloud-arrow-up"></i> Đồng bộ CLB Sheet
-                            </button>
-                            <button onclick="event.stopPropagation(); migrateClbCreatorIds()" class="btn btn-sm"
-                                style="background: rgba(234,179,8,0.15); color: #ca8a04; border: 1px solid rgba(234,179,8,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
-                                <i class="fa-solid fa-people-arrows"></i> Đẩy về Sale
-                            </button>
-                            <button onclick="event.stopPropagation(); stopClbSync()" class="btn btn-sm"
-                                style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 12px; white-space: nowrap; padding: 6px 12px;">
-                                <i class="fa-solid fa-stop"></i> Dừng
-                            </button>
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                <button onclick="event.stopPropagation(); syncClbToSheet()" class="btn btn-sm"
+                                    style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-cloud-arrow-up"></i> CLB
+                                </button>
+                                <button onclick="event.stopPropagation(); migrateClbCreatorIds()" class="btn btn-sm"
+                                    style="background: rgba(234,179,8,0.15); color: #ca8a04; border: 1px solid rgba(234,179,8,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-people-arrows"></i> Sale
+                                </button>
+                                <button onclick="event.stopPropagation(); stopClbSync()" class="btn btn-sm"
+                                    style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
+                                    <i class="fa-solid fa-stop"></i>
+                                </button>
+                            </div>
                         </div>
                         <div class="admin-collapse-body" style="display:none; margin-top:10px;">
                             <div
@@ -1650,7 +1662,7 @@
                 }
             </script>
             <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-            <script src="app.js?v=6.40"></script>
+            <script src="app.js?v=6.52"></script>
 </body>
 
 </html>
