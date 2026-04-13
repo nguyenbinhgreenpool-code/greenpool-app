@@ -188,19 +188,43 @@ function renderSaleClbList() {
         const activatedStr = activatedDate ? activatedDate.toLocaleDateString('vi-VN') : 'Chưa KH';
         const pkg = `${a.sessionsPerWeek || 3} buổi/tuần × ${a.contractMonths || 3} tháng`;
 
+        // Tính số ngày còn lại
+        let remainDays = '';
+        if (expDate && !isExpired && !isFrozen && activatedDate) {
+            const diff = Math.ceil((expDate - now) / (1000 * 60 * 60 * 24));
+            remainDays = `(còn ${diff} ngày)`;
+        }
+        const totalAtt = a.totalAttendance || 0;
+        const combo = a.comboType || '';
+        const gender = a.gender || '';
+
         html += `<div style="padding:12px 14px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:10px; border-left:3px solid ${statusColor};">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <div style="font-weight:600; font-size:14px; color:var(--text-color);">🏅 ${a.name || 'N/A'}</div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                <div style="font-weight:600; font-size:14px; color:var(--text-color);">🏅 ${a.name || 'N/A'} ${gender ? `<span style="font-size:11px; color:var(--text-muted); font-weight:400;">(${gender})</span>` : ''}</div>
                 <span style="font-size:11px; padding:2px 8px; border-radius:12px; background:${statusColor}15; color:${statusColor}; font-weight:600;">${statusLabel}</span>
             </div>
-            <div style="display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12px; color:var(--text-muted);">
-                ${a.phone ? `<span>📞 ${a.phone}</span>` : ''}
-                ${a.contractNumber ? `<span>📋 ${a.contractNumber}</span>` : ''}
-                <span>🏊 Lớp ${a.athleteClass || 'N/A'}</span>
-                <span>📦 ${pkg}</span>
-                <span>📅 KH: ${activatedStr}</span>
-                <span>📅 HSD: ${expStr}</span>
+            <div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">
+                ${a.phone ? `${a.phone} • ` : ''}${a.sessionsPerWeek || 3} buổi/tuần • ${a.contractMonths || 3}T
             </div>
+            <div style="display:flex; flex-wrap:wrap; gap:4px 12px; font-size:12px; color:var(--text-muted);">
+                <span>🏋️ Đã tập: <strong style="color:var(--primary);">${totalAtt} buổi</strong></span>
+                <span>📅 KH: <strong>${activatedStr}</strong></span>
+                <span>🔴 HH: <strong>${expStr}</strong> <em style="color:#f59e0b;">${remainDays}</em></span>
+            </div>
+            ${combo ? `<div style="margin-top:4px; font-size:11px;"><span style="padding:2px 8px; border-radius:10px; background:rgba(16,185,129,0.1); color:#10b981; font-weight:600;">🟢 ${combo}</span></div>` : ''}
+            ${a.contractNumber ? `<div style="margin-top:4px; font-size:11px; color:var(--text-muted);">📋 HĐ: ${a.contractNumber} • 🏊 Lớp ${a.athleteClass || 'N/A'}</div>` : ''}
+            ${a.poolPlan ? `<div style="margin-top:6px; padding:6px 10px; background:rgba(59,130,246,0.06); border-radius:6px; border:1px solid rgba(59,130,246,0.15); font-size:12px; color:#3b82f6;">
+                🏊 <strong>PA vào bể:</strong> ${a.poolPlan}
+            </div>` : ''}
+            <div style="margin-top:6px; display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap;">
+                <button onclick="showClbAttHistory('${a.id}', this)" class="btn btn-sm" style="background:rgba(139,92,246,0.1); color:#8b5cf6; font-size:11px; padding:4px 10px; border:1px solid rgba(139,92,246,0.25);">
+                    <i class="fa-solid fa-clock-rotate-left"></i> Lịch sử ĐD
+                </button>
+                <button onclick="editClbPoolPlan('${a.id}', '${(a.name || '').replace(/'/g, "\\'")}')" class="btn btn-sm" style="background:rgba(59,130,246,0.1); color:#3b82f6; font-size:11px; padding:4px 10px; border:1px solid rgba(59,130,246,0.25);">
+                    <i class="fa-solid fa-water"></i> PA vào bể
+                </button>
+            </div>
+            <div id="clb-att-history-${a.id}" style="display:none; margin-top:6px;"></div>
         </div>`;
     });
     listBox.innerHTML = html;
@@ -223,6 +247,32 @@ window.setSaleClbFilter = function (mode) {
         }
     });
     renderSaleClbList();
+};
+
+// ===== SỬA PHƯƠNG ÁN VÀO BỂ (CLB) =====
+window.editClbPoolPlan = async function (athleteId, athleteName) {
+    try {
+        const doc = await db.collection('athletes').doc(athleteId).get();
+        if (!doc.exists) return alert('Không tìm thấy VĐV!');
+        const data = doc.data();
+        const current = data.poolPlan || '';
+
+        const newPlan = prompt(
+            `🏊 PHƯƠNG ÁN VÀO BỂ\nVĐV: ${athleteName}\n\nNhập phương án (VD: T2-T4-T6 17h30, Bể A...):\n\n(Bỏ trống để xóa)`,
+            current
+        );
+        if (newPlan === null) return; // Cancel
+
+        await db.collection('athletes').doc(athleteId).update({
+            poolPlan: newPlan.trim(),
+            poolPlanUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            poolPlanUpdatedBy: currentUserDisplayName || currentUserId
+        });
+
+        alert(`✅ Đã cập nhật PA vào bể cho "${athleteName}"${newPlan.trim() ? '\n🏊 ' + newPlan.trim() : '\n(Đã xóa)'}`);
+    } catch (e) {
+        alert('❌ Lỗi: ' + e.message);
+    }
 };
 
 function renderSaleStats() {
