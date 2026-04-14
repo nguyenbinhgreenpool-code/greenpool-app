@@ -4082,7 +4082,8 @@ function listenToBranchData(branchId) {
             updateAllUI(); // Render lại list học viên và card count
         });
 
-    // 3. Lắng nghe Queue
+    // 3. Lắng nghe Queue (chỉ staff, KHACHHANG không cần)
+    if (currentUserRole !== 'KHACHHANG') {
     const u3 = db.collection('queues').doc(branchId)
         .onSnapshot(doc => {
             localState.queueLoaded = true;
@@ -4196,7 +4197,10 @@ function listenToBranchData(branchId) {
             updateAllUI();
         });
 
-    unsubs.push(u1, u2, u3, u4, u5);
+    unsubs.push(u3, u4, u5);
+    } // end if !== KHACHHANG
+
+    unsubs.push(u1, u2);
 }
 
 // ===================== CORE LOGIC & ACTIONS ===================== //

@@ -2,9 +2,119 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      // Yêu cầu đăng nhập mới được đọc/ghi dữ liệu
-      allow read, write: if request.auth != null;
+
+    // ===== HELPER FUNCTIONS =====
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isStaff() {
+      return isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE', 'TEACHER', 'LETAN'];
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER'];
+    }
+
+    // ===== USERS =====
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ===== STUDENTS (HV Cơ bản) =====
+    match /students/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
+      allow update: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE', 'TEACHER', 'LETAN'];
+      allow delete: if isAdmin();
+    }
+
+    // ===== ATTENDANCE (Điểm danh HV) =====
+    match /attendance/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN'];
+      allow update: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN', 'TEACHER'];
+      allow delete: if isAdmin();
+    }
+
+    // ===== ATHLETES (VĐV CLB) =====
+    match /athletes/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
+      allow update: if isAuthenticated() && isStaff();
+      allow delete: if isAdmin();
+    }
+
+    // ===== CLB ATTENDANCE (Điểm danh CLB) =====
+    match /clb_attendance/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN'];
+      allow update: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN'];
+      allow delete: if isAdmin();
+    }
+
+    // ===== CLB ATHLETES =====
+    match /clb_athletes/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isStaff();
+    }
+
+    // ===== NOTIFICATIONS =====
+    match /notifications/{id} {
+      // Cho phép đọc nếu query có where('toUserId', '==', auth.uid) hoặc admin
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isStaff();
+      allow update: if isAuthenticated() && (resource.data.toUserId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ===== QUEUES (Phân lượt GV) =====
+    match /queues/{id} {
+      allow read: if isAuthenticated() && isStaff();
+      allow write: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER'];
+    }
+
+    // ===== QUEUE LOGS =====
+    match /queue_logs/{id} {
+      allow read: if isAuthenticated() && isStaff();
+      allow write: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER'];
+    }
+
+    // ===== PENALTIES (Phạt GV) =====
+    match /penalties/{id} {
+      allow read: if isAuthenticated() && isStaff();
+      allow write: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER'];
+    }
+
+    // ===== SALARY SUBMISSIONS (Chốt lương) =====
+    match /salary_submissions/{id} {
+      allow read: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
+      allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ===== BRANCHES =====
+    match /branches/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ===== BACKUPS =====
+    match /backups/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // ===== BACKUP COLLECTIONS (backup_students_*) =====
+    match /{collection}/{id} {
+      allow read, write: if isAdmin() && collection.matches('backup_.*');
     }
   }
 }
