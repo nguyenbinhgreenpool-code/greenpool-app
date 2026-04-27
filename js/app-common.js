@@ -426,8 +426,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (financeTab) financeTab.style.display = 'flex';
             const clbAdminActions = document.getElementById('clb-admin-actions');
             if (clbAdminActions) clbAdminActions.style.display = 'flex';
-            const qDbg = document.getElementById('btn-queue-debug');
-            if (qDbg) qDbg.style.display = 'inline-flex';
+
             const qHist = document.getElementById('btn-queue-history');
             if (qHist) qHist.style.display = 'inline-flex';
             document.querySelector('[data-tab="dashboard"]').click();
@@ -443,8 +442,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (clbTab) clbTab.style.display = 'flex';
             if (financeTab) financeTab.style.display = 'flex';
             if (saleStatsTab) saleStatsTab.style.display = 'flex';
-            const qDbg2 = document.getElementById('btn-queue-debug');
-            if (qDbg2) qDbg2.style.display = 'inline-flex';
+            const clbAdminActions2 = document.getElementById('clb-admin-actions');
+            if (clbAdminActions2) clbAdminActions2.style.display = 'flex';
+
             const qHist2 = document.getElementById('btn-queue-history');
             if (qHist2) qHist2.style.display = 'inline-flex';
             document.querySelector('[data-tab="dashboard"]').click();
@@ -961,11 +961,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         isDiving = true;
                     }
 
-                    const isFirstStudent = (i === 1);
+                    const isLastStudent = (i === count);
                     const isTest = document.getElementById(`sale-student-test-${i}`)?.checked || false;
                     // Lặn: không theo queue (isDiving=true → truyền isException=true để skip queue, nhưng không ghi nợ)
-                    const isExceptionForThisStudent = isDiving ? true : (isSaleExceptionMode && isFirstStudent);
-                    await saleAssignStudent(name, phone, gender, ageCategory, contractNumber, finalTeacherId, curriculum, ptSessions, isExceptionForThisStudent, age, isTest, isDiving);
+                    const isExceptionForThisStudent = isDiving ? true : (isSaleExceptionMode && (i === 1));
+                    // Chỉ advance queue khi là HV CUỐI CÙNG trong lượt (count > 1 → HV trước skip queue)
+                    const skipQueue = (!isLastStudent && !isDiving && !isExceptionForThisStudent);
+                    await saleAssignStudent(name, phone, gender, ageCategory, contractNumber, finalTeacherId, curriculum, ptSessions, isExceptionForThisStudent, age, isTest, isDiving, skipQueue);
                 }
 
                 alert(`✅ Đã gán ${count} học viên thành công!`);
@@ -997,10 +999,14 @@ document.addEventListener('DOMContentLoaded', () => {
     window.confirmSalary = async function (studentId, studentName) {
         if (!confirm(`Xác nhận CHỐT LƯƠNG cho học viên "${studentName}"? Hành động này không thể hoàn tác.`)) return;
         try {
+            const now = new Date();
+            const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
             await db.collection('students').doc(studentId).update({
                 salaryConfirmed: true,
                 salaryConfirmedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                salaryConfirmedBy: currentUserId
+                salaryConfirmedBy: currentUserId,
+                salarySubmittedMonth: month,
+                salarySubmittedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
             // Thông báo Sale: GV đã chốt lương
             const stuDoc = await db.collection('students').doc(studentId).get();

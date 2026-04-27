@@ -29,7 +29,7 @@ messaging.onBackgroundMessage((payload) => {
     return self.registration.showNotification(title, options);
 });
 
-const CACHE_NAME = 'greenpool-v7.0';
+const CACHE_NAME = 'greenpool-v7.2';
 
 self.addEventListener('install', (e) => {
     self.skipWaiting();

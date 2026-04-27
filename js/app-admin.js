@@ -1816,18 +1816,18 @@ window.renderFinanceTab = async function () {
 
         // Bảng giá tiền công GV
         const SALARY_PRICE_MAP = {
-            'Ếch Trẻ em': 750000, 'Bơi Ếch': 750000,
-            'Sải Trẻ em': 900000, 'Bơi Sải': 900000,
+            'Bơi Ếch Trẻ em': 750000, 'Bơi Ếch': 750000,
+            'Bơi Sải Trẻ em': 900000, 'Bơi Sải': 900000,
             'Ếch Vip Trẻ em': 1312000, 'Ếch Vip': 1312000,
             'Sải Vip Trẻ em': 1487500, 'Sải Vip': 1487500,
-            'Ếch Người lớn': 900000,
-            'Sải Người lớn': 1050000,
+            'Bơi Ếch Người lớn': 900000,
+            'Bơi Sải Người lớn': 1050000,
             'Ếch Vip Người lớn': 1487500,
             'Sải Vip Người lớn': 1662000,
             'Bơi Ngửa': 1050000,
             'Bơi Bướm': 1650000,
             'PT': 200000, // tính theo buổi
-            'Dolphin 1': 0, 'Dolphin 2': 0, 'Lặn Tiên cá': 0, 'Trải nghiệm Tiên cá': 0 // Anh cập nhật giá sau
+            'Dolphin 1': 1225000, 'Dolphin 2': 1925000, 'Lặn Tiên cá': 0, 'Trải nghiệm Tiên cá': 0
         };
 
         function calcSalary(s) {
@@ -1950,14 +1950,14 @@ function downloadXLSX(rows, filename, sheetName) {
 
 function salaryPrice(s) {
     const MAP = {
-        'Ếch Trẻ em': 750000, 'Bơi Ếch': 750000,
-        'Sải Trẻ em': 900000, 'Bơi Sải': 900000,
+        'Bơi Ếch Trẻ em': 750000, 'Bơi Ếch': 750000,
+        'Bơi Sải Trẻ em': 900000, 'Bơi Sải': 900000,
         'Ếch Vip Trẻ em': 1312000, 'Ếch Vip': 1312000,
         'Sải Vip Trẻ em': 1487500, 'Sải Vip': 1487500,
-        'Ếch Người lớn': 900000, 'Sải Người lớn': 1050000,
+        'Bơi Ếch Người lớn': 900000, 'Bơi Sải Người lớn': 1050000,
         'Ếch Vip Người lớn': 1487500, 'Sải Vip Người lớn': 1662000,
         'Bơi Ngửa': 1050000, 'Bơi Bướm': 1650000, 'PT': 200000,
-        'Dolphin 1': 0, 'Dolphin 2': 0, 'Lặn Tiên cá': 0, 'Trải nghiệm Tiên cá': 0
+        'Dolphin 1': 1225000, 'Dolphin 2': 1925000, 'Lặn Tiên cá': 0, 'Trải nghiệm Tiên cá': 0
     };
     const cur = s.curriculum || 'Bơi Ếch';
     const age = s.ageCategory || 'Trẻ em';
@@ -1983,11 +1983,25 @@ function buildSalaryRows(submissions) {
     return rows;
 }
 
+// Xuất Excel từng GV: bỏ cột Buổi + Thành tiền
+function buildTeacherSalaryRows(submissions) {
+    const rows = [['STT', 'Giáo viên', 'Cơ sở', 'Họ tên HV', 'SĐT', 'Số HĐ', 'Kiểu bơi', 'Độ tuổi', 'Sale', 'Sale XN']];
+    let idx = 0;
+    submissions.forEach(sub => {
+        const branchName = FIXED_BRANCHES.find(b => b.id === sub.branchId)?.name || sub.branchId;
+        (sub.students || []).forEach(s => {
+            idx++;
+            rows.push([idx, sub.teacherName, branchName, s.name, s.phone || '', s.contractNumber || '', s.curriculum || 'Bơi Ếch', s.ageCategory === 'Người lớn' ? 'Người lớn' : 'Trẻ em', s.creatorName || s.saleName || '', s.saleConfirmedBy || '']);
+        });
+    });
+    return rows;
+}
+
 window.exportTeacherSalary = function (idx) {
     const subs = window._financeSubmissions;
     if (!subs || !subs[idx]) return alert('Không tìm thấy dữ liệu!');
     const sub = subs[idx];
-    const rows = buildSalaryRows([sub]);
+    const rows = buildTeacherSalaryRows([sub]);
     const month = window._financeMonth || '';
     downloadXLSX(rows, `Luong_${sub.teacherName.replace(/\s+/g, '_')}_${month}.xlsx`, 'Lương GV');
 };
@@ -2008,24 +2022,13 @@ window.submitSalary = async function () {
     const monthLabel = `Tháng ${now.getMonth() + 1}/${now.getFullYear()}`;
 
     try {
-        // Kiểm tra đã chốt tháng này chưa
-        const existCheck = await db.collection('salary_submissions')
-            .where('teacherId', '==', currentUserId)
-            .where('month', '==', month)
-            .where('branchId', '==', currentBranchId)
-            .get();
-        if (!existCheck.empty) {
-            alert(`❌ Bạn đã chốt lương ${monthLabel} rồi!\n\nMỗi tháng chỉ được chốt 1 lần.`);
-            return;
-        }
-
         // Lấy danh sách HV của GV này
         const studSnap = await db.collection('students')
             .where('assignedTeacherId', '==', currentUserId)
             .where('branchId', '==', currentBranchId)
             .get();
 
-        // Lấy danh sách HV đã chốt ở tháng trước (tránh trùng)
+        // Lấy danh sách HV đã chốt ở các tháng trước (tránh trùng gói thường)
         const prevSnap = await db.collection('salary_submissions')
             .where('teacherId', '==', currentUserId)
             .get();
@@ -2042,7 +2045,7 @@ window.submitSalary = async function () {
         });
 
         // Lọc HV đủ điều kiện
-        // - Gói thường: đủ buổi + ≥7 buổi
+        // - Gói thường: đủ buổi + ≥7 buổi + chưa chốt tháng này
         // - Gói PT: đã dạy ≥ 50% khóa, chốt theo buổi đã ĐD (trừ buổi đã chốt)
         const eligible = [];
         const notEligible = [];
@@ -2052,6 +2055,9 @@ window.submitSalary = async function () {
             const sessions = s.sessions || 0;
             const total = s.totalSessions || 10;
             const cur = s.curriculum || 'Bơi Ếch';
+
+            // Bỏ qua HV đã chốt tháng này (đã bấm chốt trước đó trong tháng)
+            if (s.salarySubmittedMonth === month) return;
 
             if (cur === 'PT') {
                 // PT: cho phép chốt khi >= 50% khóa
@@ -2071,7 +2077,7 @@ window.submitSalary = async function () {
                     notEligible.push({ name: s.name, reasons: [`PT chưa đủ 50% (${sessions}/${total}, cần ≥${halfTotal})`] });
                 }
             } else {
-                // Gói thường: >= 7 buổi + hoàn thành tiến trình
+                // Gói thường: >= 7 buổi + chưa chốt ở lần trước
                 if (alreadySubmittedIds.has(doc.id)) return;
                 const min7 = sessions >= 7;
 

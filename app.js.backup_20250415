@@ -575,7 +575,7 @@ let localState = {
 const DIVING_CURRICULUMS = {
     'Dolphin 1': 4,
     'Dolphin 2': 5,
-    'Basic Mermaid': 5,
+    'Lặn Tiên cá': 4,
     'Trải nghiệm Tiên cá': 1
 };
 function isDivingCurriculum(cur) {
@@ -669,34 +669,9 @@ function renderDateFilterBar() {
 // Các hàm Unsubscribe (Để dọn dẹp realtime listener khi chuyển branch)
 let unsubs = [];
 
-// ===================== KIỂM TRA TRÙNG HỢP ĐỒNG ===================== //
-// Check trùng số HĐ trong cùng cơ sở (cả HV cơ bản + VĐV CLB)
-async function checkDuplicateContract(contractNumber, branchId) {
-    if (!contractNumber || !branchId) return null;
-    // Check trong students
-    const studentsSnap = await db.collection('students')
-        .where('branchId', '==', branchId)
-        .get();
-    const dupStudent = studentsSnap.docs.find(doc => doc.data().contractNumber === contractNumber);
-    if (dupStudent) {
-        const d = dupStudent.data();
-        return `Số hợp đồng "${contractNumber}" đã tồn tại!\n👤 HV: ${d.name || 'N/A'}\n📋 Loại: Học viên cơ bản\n\nVui lòng kiểm tra lại.`;
-    }
-    // Check trong athletes (CLB)
-    const athletesSnap = await db.collection('athletes')
-        .where('branchId', '==', branchId)
-        .get();
-    const dupAthlete = athletesSnap.docs.find(doc => doc.data().contractNumber === contractNumber);
-    if (dupAthlete) {
-        const d = dupAthlete.data();
-        return `Số hợp đồng "${contractNumber}" đã tồn tại!\n👤 VĐV: ${d.name || 'N/A'}\n📋 Loại: CLB KID TL\n\nVui lòng kiểm tra lại.`;
-    }
-    return null; // Không trùng
-}
-
 // ===================== GOOGLE SHEET AUTO SYNC ===================== //
 // Dán URL Web App từ Google Apps Script vào đây sau khi deploy
-const GOOGLE_SHEET_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbzen64O9Pz0B5CChZVKcKrdTXoNFIwx6h9f-ZW7upT1cHuPa-p7M9GREtyI6H1Fon85Sg/exec';
+const GOOGLE_SHEET_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbzzIll0r2UNbW_-zawsbxORoVrpH8PE8j3TjwPRtiVBR849Tg97aAXXK8wvCjLr6IEALQ/exec';
 const GOOGLE_CLB_SHEET_URL = 'https://script.google.com/macros/s/AKfycbw7CKESPLtYiiU76fPOL8SZp5zYGirFaE0XQMgISqqrwgvTsgKkaOZEq5vlEC6nyP9DXg/exec';
 
 async function syncToGoogleSheet(data) {
@@ -723,7 +698,8 @@ async function syncClbRowToSheet(data) {
         });
     } catch (e) { console.warn('CLB Sheet sync error:', e); }
 }
-// ========== ĐỒNG BỘ HỌC VIÊN LÊN GOOGLE SHEET (có chọn CS) ========== //
+
+// Đồng bộ từng cơ sở vào tab riêng trong Google Sheet
 let _isSyncing = false;
 let _syncAbort = false;
 
@@ -736,22 +712,8 @@ window.stopSyncSheet = function () {
 
 window.syncAllStudentsToSheet = async function () {
     if (!GOOGLE_SHEET_WEBAPP_URL) return alert('Chưa cấu hình Google Sheet URL!');
-    if (_isSyncing) return alert('⏳ Đang đồng bộ, vui lòng chờ...\n\nBấm nút Dừng để huỷ.');
-
-    // Cho chọn cơ sở
-    let branchOptions = '0. TẤT CẢ cơ sở\n';
-    FIXED_BRANCHES.forEach((b, i) => { branchOptions += `${i + 1}. ${b.name}\n`; });
-    const choice = prompt(`📊 ĐỒNG BỘ HỌC VIÊN LÊN SHEET\n\nChọn cơ sở để đồng bộ (nhập số):\n${branchOptions}\n⚠️ Dữ liệu cũ của CS được chọn sẽ XOÁ rồi ghi lại.`);
-    if (choice === null) return;
-    const choiceNum = parseInt(choice);
-    if (isNaN(choiceNum) || choiceNum < 0 || choiceNum > FIXED_BRANCHES.length) {
-        return alert('Lựa chọn không hợp lệ!');
-    }
-    const selectedBranch = choiceNum === 0 ? null : FIXED_BRANCHES[choiceNum - 1];
-    const confirmMsg = selectedBranch
-        ? `Đồng bộ HV cơ sở "${selectedBranch.name}"?\n⚠️ Tab "${selectedBranch.name}" trên Sheet sẽ bị xoá và ghi lại.`
-        : 'Đồng bộ TẤT CẢ cơ sở?\n⚠️ Tất cả tab HV trên Sheet sẽ bị xoá và ghi lại.';
-    if (!confirm(confirmMsg)) return;
+    if (_isSyncing) return alert('⏳ Đang đồng bộ, vui lòng chờ...\n\nBấm nút ⏹️ Dừng đồng bộ để huỷ.');
+    if (!confirm('📊 Đồng bộ học viên lên Google Sheet?\n\nMỗi cơ sở = 1 tab riêng.\n⚠️ Dữ liệu cũ sẽ được XOÁ rồi ghi lại từ đầu.')) return;
 
     _isSyncing = true;
     _syncAbort = false;
@@ -768,7 +730,6 @@ window.syncAllStudentsToSheet = async function () {
             const s = doc.data();
             const branch = FIXED_BRANCHES.find(b => b.id === s.branchId);
             const branchName = branch?.name || 'Khác';
-            if (selectedBranch && branchName !== selectedBranch.name) return;
             if (!branchStudents[branchName]) branchStudents[branchName] = [];
             const teacher = usersMap[s.assignedTeacherId];
             const creator = usersMap[s.creatorId];
@@ -787,6 +748,7 @@ window.syncAllStudentsToSheet = async function () {
             });
         });
 
+        // Sắp xếp theo ngày tạo HĐ
         for (const arr of Object.values(branchStudents)) {
             arr.sort((a, b) => a._sortTs - b._sortTs);
         }
@@ -796,11 +758,10 @@ window.syncAllStudentsToSheet = async function () {
             if (students.length === 0) continue;
             if (_syncAbort) { alert('⏹️ Đã dừng đồng bộ!'); break; }
 
-            console.log(`🔄 Đang xoá tab ${branchName}...`);
             await fetch(GOOGLE_SHEET_WEBAPP_URL, {
                 method: 'POST', mode: 'no-cors',
                 headers: { 'Content-Type': 'text/plain' },
-                body: JSON.stringify({ action: 'clearBranch', branchName })
+                body: JSON.stringify({ action: 'clearBranch', branchName: branchName })
             });
             await new Promise(r => setTimeout(r, 1500));
 
@@ -820,13 +781,13 @@ window.syncAllStudentsToSheet = async function () {
                     })
                 });
                 if ((i + 1) % 10 === 0) console.log(`Sync ${branchName}: ${i + 1}/${students.length}`);
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise(r => setTimeout(r, 250));
             }
             if (_syncAbort) break;
             totalCount += students.length;
         }
 
-        if (!_syncAbort) alert(`✅ Đã đồng bộ ${totalCount} học viên${selectedBranch ? ' (' + selectedBranch.name + ')' : ''} lên Google Sheet!`);
+        if (!_syncAbort) alert(`✅ Đã đồng bộ ${totalCount} học viên lên Google Sheet!`);
     } catch (e) {
         alert('Lỗi đồng bộ: ' + e.message);
     } finally {
@@ -835,7 +796,7 @@ window.syncAllStudentsToSheet = async function () {
     }
 };
 
-// ========== ĐỒNG BỘ ĐIỂM DANH LÊN GOOGLE SHEET (có chọn CS) ========== //
+// ========== ĐỒNG BỘ LỊCH SỬ ĐIỂM DANH LÊN GOOGLE SHEET ========== //
 let _isAttSyncing = false;
 let _attSyncAbort = false;
 
@@ -846,40 +807,32 @@ window.stopAttSync = function () {
 window.syncAttendanceToSheet = async function () {
     if (!GOOGLE_SHEET_WEBAPP_URL) return alert('Chưa cấu hình Google Sheet URL!');
     if (_isAttSyncing) return alert('⏳ Đang đồng bộ, vui lòng chờ...');
-
-    let branchOptions = '0. TẤT CẢ cơ sở\n';
-    FIXED_BRANCHES.forEach((b, i) => { branchOptions += `${i + 1}. ${b.name}\n`; });
-    const choice = prompt(`📋 ĐỒNG BỘ ĐIỂM DANH LÊN SHEET\n\nChọn cơ sở (nhập số):\n${branchOptions}\n• Yêu cầu: ĐÃ đồng bộ danh sách HV trước`);
-    if (choice === null) return;
-    const choiceNum = parseInt(choice);
-    if (isNaN(choiceNum) || choiceNum < 0 || choiceNum > FIXED_BRANCHES.length) {
-        return alert('Lựa chọn không hợp lệ!');
-    }
-    const selectedBranch = choiceNum === 0 ? null : FIXED_BRANCHES[choiceNum - 1];
+    if (!confirm('📋 Đồng bộ lịch sử điểm danh lên Google Sheet?\n\n• Mỗi HV = 1 dòng, mỗi buổi = 1 cột\n• Yêu cầu: ĐÃ đồng bộ danh sách HV trước\n• Dữ liệu điểm danh sẽ ghi vào cột Buổi 1, 2, 3...')) return;
 
     _isAttSyncing = true;
     _attSyncAbort = false;
     try {
+        // Lấy toàn bộ attendance records
         const attSnap = await db.collection('attendance').get();
         const studentsSnap = await db.collection('students').get();
 
+        // Map studentId → contractNumber + branchName
         const studentMap = {};
         studentsSnap.docs.forEach(doc => {
             const s = doc.data();
             const branch = FIXED_BRANCHES.find(b => b.id === s.branchId);
-            const branchName = branch?.name || 'Khác';
-            if (selectedBranch && branchName !== selectedBranch.name) return;
             studentMap[doc.id] = {
                 contractNumber: s.contractNumber || '',
-                branchName: branchName,
+                branchName: branch?.name || 'Khác',
                 totalSessions: s.totalSessions || 10
             };
         });
 
+        // Nhóm attendance theo studentId, sắp xếp theo thời gian
         const attByStudent = {};
         attSnap.docs.forEach(doc => {
             const a = doc.data();
-            if (!a.studentId || !studentMap[a.studentId]) return;
+            if (!a.studentId) return;
             if (!attByStudent[a.studentId]) attByStudent[a.studentId] = [];
             const ts = a.createdAt?.toDate ? a.createdAt.toDate() : null;
             attByStudent[a.studentId].push({
@@ -888,10 +841,12 @@ window.syncAttendanceToSheet = async function () {
             });
         });
 
+        // Sắp xếp theo thời gian cho từng HV
         for (const arr of Object.values(attByStudent)) {
             arr.sort((a, b) => a.ts - b.ts);
         }
 
+        // Tìm maxSessions theo từng branch (để tạo header đầy đủ)
         const branchMaxSessions = {};
         for (const [studentId, records] of Object.entries(attByStudent)) {
             const info = studentMap[studentId];
@@ -901,16 +856,22 @@ window.syncAttendanceToSheet = async function () {
             branchMaxSessions[br] = Math.max(branchMaxSessions[br] || 0, maxS);
         }
 
+        // Xoá attendance headers cũ cho mỗi branch trước khi ghi lại
         for (const [brName, maxS] of Object.entries(branchMaxSessions)) {
             if (_attSyncAbort) break;
             await fetch(GOOGLE_SHEET_WEBAPP_URL, {
                 method: 'POST', mode: 'no-cors',
                 headers: { 'Content-Type': 'text/plain' },
-                body: JSON.stringify({ action: 'clearAttendanceCols', branchName: brName, maxSessions: maxS })
+                body: JSON.stringify({
+                    action: 'clearAttendanceCols',
+                    branchName: brName,
+                    maxSessions: maxS
+                })
             });
             await new Promise(r => setTimeout(r, 500));
         }
 
+        // Ghi điểm danh từng HV
         let count = 0;
         const total = Object.keys(attByStudent).length;
         for (const [studentId, records] of Object.entries(attByStudent)) {
@@ -929,13 +890,13 @@ window.syncAttendanceToSheet = async function () {
                 })
             });
             count++;
-            if (count % 3 === 0) {
+            if (count % 5 === 0) {
                 console.log(`📋 Sync điểm danh: ${count}/${total}`);
-                await new Promise(r => setTimeout(r, 600));
+                await new Promise(r => setTimeout(r, 300));
             }
         }
 
-        if (!_attSyncAbort) alert(`✅ Đã đồng bộ điểm danh ${count} HV${selectedBranch ? ' (' + selectedBranch.name + ')' : ''} lên Sheet!`);
+        if (!_attSyncAbort) alert(`✅ Đã đồng bộ điểm danh ${count} học viên lên Google Sheet!`);
     } catch (e) {
         alert('Lỗi đồng bộ điểm danh: ' + e.message);
     } finally {
@@ -943,7 +904,6 @@ window.syncAttendanceToSheet = async function () {
         _attSyncAbort = false;
     }
 };
-
 
 // ========== ĐỒNG BỘ VĐV CLB KID TL RA GOOGLE SHEET ========== //
 let _isClbSyncing = false;
@@ -1078,7 +1038,7 @@ function parseCurriculumValue(raw) {
         'PT':               { curriculum: 'PT', ageCategory: '' },
         'Dolphin 1':        { curriculum: 'Dolphin 1', ageCategory: '' },
         'Dolphin 2':        { curriculum: 'Dolphin 2', ageCategory: '' },
-        'Basic Mermaid':    { curriculum: 'Basic Mermaid', ageCategory: '' },
+        'Lặn Tiên cá':      { curriculum: 'Lặn Tiên cá', ageCategory: '' },
         'Trải nghiệm Tiên cá': { curriculum: 'Trải nghiệm Tiên cá', ageCategory: '' },
     };
     return map[raw] || { curriculum: raw, ageCategory: '' };
@@ -1504,7 +1464,7 @@ function renderDashboard() {
     }
 
     // Admin: thêm nút "Đẩy lên Top 1" cho GV cuối cùng trong hàng đợi
-    if ((currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') && qContainer.children.length > 0) {
+    if (currentUserRole === 'ADMIN' && qContainer.children.length > 0) {
         const lastNode = qContainer.querySelectorAll('.teacher-node');
         if (lastNode.length > 1) {
             const last = lastNode[lastNode.length - 1];
@@ -1858,14 +1818,1526 @@ function renderDemographics() {
 
     container.innerHTML = html;
 }
-// ==================== TEACHER MODULE - ĐÃ TÁCH RA js/teacher.js ====================
-// Code gốc backup tại: app.js.backup_20250415 (dòng 1821~2604)
-// ==================================================================================
+let teacherSearchQuery = '';
+let teacherFilterMode = 'all';
+
+function renderTeacherStudents() {
+    const list = document.getElementById('teacher-students-list');
+    const statsBox = document.getElementById('teacher-stats-summary');
+    let teacherId = document.getElementById('select-teacher-view').value;
+
+    // NẾU TÀI KHOẢN HIỆN TẠI LÀ HLV -> Khóa luôn teacherId = currentUserId
+    if (currentUserRole === 'TEACHER') {
+        teacherId = currentUserId;
+    }
+
+    list.innerHTML = '';
+    if (statsBox) statsBox.innerHTML = '';
+
+    // Render thông tin giáo viên được chọn (chỉ cho ADMIN/SALE)
+    const teacherCard = document.getElementById('teacher-profile-card');
+    if (teacherCard) {
+        const selectedTeacher = localState.teachers.find(t => t.id === teacherId);
+        if (selectedTeacher && currentUserRole !== 'TEACHER') {
+            teacherCard.style.display = 'block';
+            const avatarEl = document.getElementById('teacher-card-avatar');
+            const nameEl = document.getElementById('teacher-card-name');
+            const emailEl = document.getElementById('teacher-card-email');
+            const detailsEl = document.getElementById('teacher-card-details');
+            if (avatarEl) {
+                avatarEl.innerHTML = selectedTeacher.avatarUrl
+                    ? `<img src="${selectedTeacher.avatarUrl}" style="width:100%;height:100%;object-fit:cover;">`
+                    : (selectedTeacher.name || 'G').charAt(0).toUpperCase();
+            }
+            if (nameEl) {
+                // Tìm tất cả vị trí (slot numbers cố định) của GV này trong fixedOrder
+                const fo = localState.fixedOrder;
+                const slotNums = localState.fixedSlotNumbers;
+                let slotLabels = [];
+                for (let qi = 0; qi < fo.length; qi++) {
+                    if (fo[qi] === selectedTeacher.id) {
+                        slotLabels.push(slotNums[qi] || (qi + 1));
+                    }
+                }
+                const posLabel = slotLabels.length > 0 ? `#${slotLabels.join(', #')} ` : '';
+                nameEl.textContent = posLabel + (selectedTeacher.name || '');
+            }
+            if (emailEl) emailEl.textContent = selectedTeacher.email || '';
+            if (detailsEl) {
+                let badges = '';
+                const branchName = FIXED_BRANCHES.find(b => b.id === selectedTeacher.branchId)?.name || '';
+                if (branchName) badges += `<span style="background:rgba(37,99,235,0.1); color:var(--primary); padding:3px 8px; border-radius:12px;">📍 ${branchName}</span>`;
+                badges += `<span style="background:rgba(37,99,235,0.1); color:var(--primary); padding:3px 8px; border-radius:12px;">🎫 ${selectedTeacher.teacherType || 'Chính'}</span>`;
+                // Hiển thị vị trí hiện tại trong queue (slot gần nhất)
+                const posInQueue = localState.fixedOrder.indexOf(selectedTeacher.id);
+                const ciPos = localState.currentIndex || 0;
+                if (posInQueue !== -1) {
+                    const distFromCurrent = (posInQueue - ciPos + localState.fixedOrder.length) % localState.fixedOrder.length;
+                    badges += `<span style="background:rgba(139,92,246,0.1); color:#7c3aed; padding:3px 8px; border-radius:12px;">🔢 Vị trí: ${distFromCurrent === 0 ? 'TOP 1' : `cách ${distFromCurrent} lượt`}</span>`;
+                }
+                if (selectedTeacher.phone) badges += `<span style="background:rgba(16,185,129,0.1); color:var(--secondary); padding:3px 8px; border-radius:12px;">📱 ${selectedTeacher.phone}</span>`;
+                if (selectedTeacher.qualification) badges += `<span style="background:rgba(245,158,11,0.1); color:#d97706; padding:3px 8px; border-radius:12px;">🎓 ${selectedTeacher.qualification}</span>`;
+                if (selectedTeacher.experience) badges += `<span style="background:rgba(139,92,246,0.1); color:#7c3aed; padding:3px 8px; border-radius:12px;">⏱️ ${selectedTeacher.experience} năm KN</span>`;
+                detailsEl.innerHTML = badges;
+            }
+        } else {
+            teacherCard.style.display = 'none';
+        }
+    }
+
+    if (!teacherId || localState.teachers.length === 0) return;
+
+    const allStudents = filterByDate(localState.students.filter(s => s.assignedTeacherId === teacherId));
+
+    // Thống kê nhanh
+    const totalCount = allStudents.length;
+    const activeCount = allStudents.filter(s => s.sessions < (s.totalSessions || 10)).length;
+    const doneCount = allStudents.filter(s => s.sessions >= (s.totalSessions || 10)).length;
+
+    if (statsBox) {
+        statsBox.innerHTML = renderDateFilterBar() + `
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px;">
+            <div style="text-align: center; padding: 10px; background: rgba(37,99,235,0.08); border-radius: 8px; border: 1px solid rgba(37,99,235,0.15);">
+                <div style="font-size: 20px; font-weight: 700; color: var(--primary);">${totalCount}</div>
+                <div style="font-size: 11px; color: var(--text-muted);">Tổng HV</div>
+            </div>
+            <div style="text-align: center; padding: 10px; background: rgba(16,185,129,0.08); border-radius: 8px; border: 1px solid rgba(16,185,129,0.15);">
+                <div style="font-size: 20px; font-weight: 700; color: #10b981;">${activeCount}</div>
+                <div style="font-size: 11px; color: var(--text-muted);">Đang học</div>
+            </div>
+            <div style="text-align: center; padding: 10px; background: rgba(239,68,68,0.08); border-radius: 8px; border: 1px solid rgba(239,68,68,0.15);">
+                <div style="font-size: 20px; font-weight: 700; color: #ef4444;">${doneCount}</div>
+                <div style="font-size: 11px; color: var(--text-muted);">Hoàn thành</div>
+            </div>
+            </div>
+        `;
+    }
+
+    if (totalCount === 0) {
+        list.innerHTML = `<div class="empty-state" style="text-align:center; padding:20px; color:var(--text-muted);">Chưa có học viên nào.</div>`;
+        return;
+    }
+
+    // Lọc theo trạng thái
+    let filtered = allStudents;
+    if (teacherFilterMode === 'active') {
+        filtered = filtered.filter(s => s.sessions < (s.totalSessions || 10));
+    } else if (teacherFilterMode === 'done') {
+        filtered = filtered.filter(s => s.sessions >= (s.totalSessions || 10));
+    } else if (teacherFilterMode === 'self') {
+        filtered = filtered.filter(s => s.source === 'Self');
+    } else if (teacherFilterMode === 'test') {
+        filtered = filtered.filter(s => s.isTestStudent === true);
+    } else if (teacherFilterMode === 'zero') {
+        filtered = filtered.filter(s => (s.sessions || 0) === 0);
+    }
+
+    // Lọc theo tên tìm kiếm
+    if (teacherSearchQuery) {
+        const q = teacherSearchQuery.toLowerCase();
+        filtered = filtered.filter(s => s.name.toLowerCase().includes(q) || (s.phone && s.phone.includes(q)));
+    }
+
+    if (filtered.length === 0) {
+        list.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-muted);">Không tìm thấy học viên phù hợp.</div>`;
+        return;
+    }
+
+    // Build lookup map: userId -> userName (Sale)
+    const saleMap = {};
+    localState.sales.forEach(s => { saleMap[s.id] = s.name; });
+    localState.teachers.forEach(t => { if (!saleMap[t.id]) saleMap[t.id] = t.name; });
+    // Giữ tên người đã bị đuổi việc
+    localState.firedUsers.forEach(u => { if (!saleMap[u.id]) saleMap[u.id] = u.name + ' (nghỉ)'; });
+
+    // Render compact rows
+    let htmlParts = '';
+    filtered.forEach(st => {
+        const total = st.totalSessions || 10;
+        const percent = Math.min((st.sessions / total) * 100, 100);
+        const isDone = st.sessions >= total;
+        const curType = st.curriculum || 'Bơi Ếch';
+        const hideProgressBtn = (curType === 'Bơi Ngửa' || curType === 'Bơi Bướm' || curType === 'PT');
+        const maxSteps = (curType === 'Bơi Ếch' || curType === 'Bơi Sải' || curType === 'Ếch Vip' || curType === 'Sải Vip') ? 6 : 0;
+        const currentStep = st.currentStep || 0;
+        let stepText = currentStep ? `B${currentStep}` : '';
+        const progressColor = isDone ? '#ef4444' : '#3b82f6';
+        const statusDot = isDone ? '🔴' : '🟢';
+        const saleName = st.creatorId ? (saleMap[st.creatorId] || 'Sale ẩn') : '';
+        const contractNum = st.contractNumber || '';
+        // Điều kiện chốt lương: Bơi ≥7 buổi, Dolphin 1 ≥3/4, Dolphin 2 ≥4/5, Lặn khác ≥ tổng-1
+        let canConfirmSalary = st.sessions >= 7;
+        if (isDivingCurriculum(curType)) {
+            if (curType === 'Dolphin 1') canConfirmSalary = st.sessions >= 3;
+            else if (curType === 'Dolphin 2') canConfirmSalary = st.sessions >= 4;
+            else canConfirmSalary = st.sessions >= (total - 1);
+        }
+        const isSalaryConfirmed = st.salaryConfirmed || false;
+        const saleOk = st.saleConfirmed === true;
+        const salaryMonth = st.salarySubmittedMonth || '';
+
+        // Format ngày giờ điền HĐ
+        let createdDateStr = '';
+        if (st.createdAt) {
+            const d = st.createdAt.toDate ? st.createdAt.toDate() : new Date(st.createdAt);
+            createdDateStr = d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' + d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        // Dòng ngang gọn: Tên HV (Sale) Số HĐ
+        htmlParts += `
+            <div class="student-compact-row" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--card-bg); border: 1px solid ${isSalaryConfirmed ? 'rgba(16,185,129,0.3)' : (isDone ? 'rgba(239,68,68,0.2)' : 'var(--border-color)')}; border-radius: 8px; cursor: pointer; transition: all 0.2s; ${isDone && !isSalaryConfirmed ? 'opacity:0.7;' : ''} ${isSalaryConfirmed ? 'background: rgba(16,185,129,0.05);' : ''}" 
+                 onclick="var act = this.nextElementSibling; if(act && act.classList.contains('compact-details')) act.classList.toggle('expanded');">
+                
+                <div style="flex: 1; min-width: 0;">
+                    <div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap;">
+                        <span style="font-size: 11px;">${isSalaryConfirmed ? '✅' : statusDot}</span>
+                        <span style="font-weight: 600; font-size: 14px;">${st.name}</span>
+                        ${st.transferredFrom ? `<span style="font-size: 10px; background: rgba(245,158,11,0.15); color: #d97706; padding: 1px 6px; border-radius: 10px; font-weight: 600;">🔄 CN</span>` : ''}
+                        ${st.isUpgrade ? `<span style="font-size: 10px; background: rgba(16,185,129,0.15); color: #059669; padding: 1px 6px; border-radius: 10px; font-weight: 600;">⬆️ NC</span>` : ''}
+                        ${saleName ? `<span style="font-size: 11px; color: var(--text-muted);">(${saleName})</span>` : ''}
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px; flex-wrap: wrap;">
+                        ${contractNum && contractNum !== 'Chưa có' ? `<span style="font-size: 11px; color: #8b5cf6; font-weight: 500;">HĐ: ${contractNum}</span>` : ''}
+                        <span style="font-size: 11px; color: #f59e0b;">${curType}</span>
+                        ${stepText ? `<span style="font-size: 10px; background: rgba(37,99,235,0.1); color: var(--primary); padding: 1px 5px; border-radius: 3px; font-weight: 600;">${stepText}</span>` : ''}
+                        ${saleOk ? `<span style="font-size: 10px; background: rgba(16,185,129,0.1); color: #10b981; padding: 1px 5px; border-radius: 3px; font-weight: 600;">✅ Sale XN</span>` : ''}
+                        ${salaryMonth ? `<span style="font-size: 10px; background: rgba(245,158,11,0.1); color: #d97706; padding: 1px 5px; border-radius: 3px; font-weight: 600;">💰 Đã chốt T${salaryMonth.split('-')[1]}</span>` : ''}
+                        ${createdDateStr ? `<span style="font-size: 10px; color: var(--text-muted);"><i class="fa-regular fa-calendar"></i> ${createdDateStr}</span>` : ''}
+                    </div>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                    <div style="width: 50px; height: 5px; background: rgba(0,0,0,0.1); border-radius: 3px; overflow: hidden;">
+                        <div style="width: ${percent}%; height: 100%; background: ${progressColor};"></div>
+                    </div>
+                    <span style="font-size: 12px; font-weight: 600; color: ${isDone ? '#ef4444' : 'var(--text-color)'}; min-width: 35px; text-align: right;">${st.sessions}/${total}</span>
+                </div>
+            </div>
+
+            <div class="compact-details" style="display: none; padding: 12px 14px; background: rgba(0,0,0,0.02); border: 1px solid var(--border-color); border-top: none; border-radius: 0 0 8px 8px; margin-top: -2px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-bottom: 10px;">
+                    <div><span style="color: var(--text-muted);">Giới tính:</span> <strong>${st.gender || 'Chưa rõ'}</strong></div>
+                    <div><span style="color: var(--text-muted);">Độ tuổi:</span> <strong>${st.ageCategory || 'Chưa rõ'}</strong></div>
+                    <div><span style="color: var(--text-muted);">SĐT:</span> <strong>${st.phone || 'Không có'}</strong></div>
+                    <div><span style="color: var(--text-muted);">Nguồn:</span> <strong>${st.source === 'Sale' ? '💼 Qua Sale' : '🏊 GV Tự tuyển'}</strong></div>
+                    <div><span style="color: var(--text-muted);">Kiểu bơi:</span> <strong style="color: #f59e0b;">${curType}</strong></div>
+                    <div><span style="color: var(--text-muted);">Số buổi:</span> <strong>${st.sessions} / ${total}</strong></div>
+                    ${maxSteps > 0 ? `<div style="grid-column: 1/-1;"><span style="color: var(--text-muted);">Tiến trình:</span> <strong style="color: var(--primary);">Bước ${currentStep} / ${maxSteps}</strong></div>` : ''}
+                    ${contractNum && contractNum !== 'Chưa có' ? `<div style="grid-column: 1/-1;"><span style="color: var(--text-muted);">Hợp đồng:</span> <strong style="color: #8b5cf6;">${contractNum}</strong></div>` : ''}
+                    ${saleName ? `<div style="grid-column: 1/-1;"><span style="color: var(--text-muted);">Sale nhập HĐ:</span> <strong>${saleName}</strong></div>` : ''}
+                    ${createdDateStr ? `<div style="grid-column: 1/-1;"><span style="color: var(--text-muted);">Ngày điền HĐ:</span> <strong style="color: var(--primary);">${createdDateStr}</strong></div>` : ''}
+                    ${st.transferredFrom ? `<div style="grid-column: 1/-1;"><span style="color: var(--text-muted);">🔄 Chuyển từ:</span> <strong style="color: #d97706;">${st.transferredByName || 'GV khác'}</strong></div>` : ''}
+                    ${st.source === 'Self' ? `<div style="grid-column: 1/-1;"><span style="color: var(--text-muted);">📋 Lý do tự tuyển:</span> <strong style="color: #10b981;">${st.selfRecruitReason || 'Chưa ghi nhận'}</strong></div>` : ''}
+                    ${st.customerReview ? `<div style="grid-column: 1/-1; background: rgba(245,158,11,0.08); padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(245,158,11,0.15); margin-top: 4px;">
+                        <span style="color: #d97706; font-weight: 600;"><i class="fa-solid fa-star"></i> Nhận xét KH:</span>
+                        <div style="color: var(--text-color); margin-top: 2px;">${st.customerReview}</div>
+                    </div>` : ''}
+                </div>
+
+                <div style="margin-bottom: 8px;">
+                    <button class="btn btn-sm" onclick="event.stopPropagation(); showAttendanceHistory('${st.id}', this)" style="background: rgba(99,102,241,0.1); color: #6366f1; font-size: 11px; padding: 4px 10px; border: 1px solid rgba(99,102,241,0.25);">
+                        <i class="fa-solid fa-clock-rotate-left"></i> Lịch sử điểm danh
+                    </button>
+                    <div id="att-history-${st.id}" style="display:none; margin-top:8px;"></div>
+                </div>
+
+                ${maxSteps > 0 ? `
+                <div style="display: flex; gap: 4px; margin-bottom: 10px;">
+                    ${Array.from({ length: maxSteps }, (_, i) => `
+                        <div style="flex: 1; height: 6px; border-radius: 3px; background: ${i < currentStep ? '#10b981' : 'rgba(0,0,0,0.1)'};"></div>
+                    `).join('')}
+                </div>
+                ` : ''}
+
+                ${currentUserRole === 'TEACHER' ? `
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px dashed var(--border-color); padding-top: 10px;">
+                    ${!hideProgressBtn ? `
+                    <button class="btn btn-sm" onclick="event.stopPropagation(); openCurriculumModal('${st.id}', '${st.name}', '${curType}', ${currentStep})" style="background: rgba(37,99,235,0.1); color: var(--primary); font-size: 12px; padding: 5px 12px; border: none;">
+                        <i class="fa-solid fa-book-open"></i> Giáo Án
+                    </button>
+                    ` : ''}
+                    ${canConfirmSalary && !isSalaryConfirmed && !salaryMonth ? `
+                    <button class="btn btn-sm" onclick="event.stopPropagation(); confirmSalary('${st.id}', '${st.name}')" style="background: rgba(16,185,129,0.15); color: #059669; font-size: 12px; padding: 5px 12px; border: 1px solid rgba(16,185,129,0.3); font-weight: 600;">
+                        <i class="fa-solid fa-money-check-dollar"></i> Chốt Lương
+                    </button>
+                    ` : ''}
+                    ${(isSalaryConfirmed || salaryMonth) && !saleOk ? `
+                    <span style="font-size: 12px; color: #f59e0b; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                        <i class="fa-solid fa-hourglass-half"></i> Chờ Sale xác nhận
+                    </span>
+                    ` : ''}
+                    ${saleOk ? `
+                    <span style="font-size: 12px; color: #10b981; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                        <i class="fa-solid fa-circle-check"></i> Đã chốt lương
+                    </span>
+                    ` : ''}
+                </div>
+                ` : ''}
+
+                ${(currentUserRole === 'TEACHER' || currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') ? `
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px dashed var(--border-color); padding-top: 10px; margin-top: ${currentUserRole === 'TEACHER' ? '8' : '0'}px;">
+                    <button class="btn btn-sm" onclick="event.stopPropagation(); transferStudent('${st.id}', '${st.name.replace(/'/g, "\\'")}', '${teacherId}')" style="background: rgba(245,158,11,0.1); color: #d97706; font-size: 12px; padding: 5px 12px; border: 1px solid rgba(245,158,11,0.25);">
+                        <i class="fa-solid fa-right-left"></i> Chuyển GV
+                    </button>
+                    <button class="btn btn-sm" onclick="event.stopPropagation(); editStudentInfo('${st.id}')" style="background: rgba(37,99,235,0.1); color: var(--primary); font-size: 12px; padding: 5px 12px; border: 1px solid rgba(37,99,235,0.25);">
+                        <i class="fa-solid fa-pen-to-square"></i> Bổ sung TT
+                    </button>
+                    ${(maxSteps > 0 ? currentStep >= maxSteps : (curType === 'PT' ? true : st.sessions >= 7)) ? `
+                    <button class="btn btn-sm" onclick="event.stopPropagation(); uploadCompletionVideo('${st.id}', '${st.name.replace(/'/g, "\\'")}')" style="background: rgba(139,92,246,0.1); color: #7c3aed; font-size: 12px; padding: 5px 12px; border: 1px solid rgba(139,92,246,0.25);">
+                        <i class="fa-solid fa-video"></i> ${st.completionVideoUrl ? '🎬 Đổi Video' : '📹 Upload Video KT'}
+                    </button>
+                    ` : ''}
+                    ${st.completionVideoUrl ? `
+                    <a href="${st.completionVideoUrl}" target="_blank" onclick="event.stopPropagation();" style="font-size: 12px; padding: 5px 12px; color: #7c3aed; text-decoration: none; display: flex; align-items: center; gap: 4px;">
+                        <i class="fa-solid fa-play-circle"></i> Xem video
+                    </a>
+                    ` : ''}
+                    ${(currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') ? `
+                    <button class="btn btn-sm" onclick="event.stopPropagation(); deleteStudent('${st.id}', '${st.name.replace(/'/g, "\'")}'  , '${st.assignedTeacherId || ''}')" style="background: rgba(239,68,68,0.1); color: #ef4444; font-size: 12px; padding: 5px 12px; border: 1px solid rgba(239,68,68,0.25);">
+                        <i class="fa-solid fa-trash"></i> Xóa HV
+                    </button>
+                    ` : ''}
+                </div>
+                ` : ''}
+
+                ${currentUserRole === 'SALE' && isDone && !saleOk ? `
+                <div style="border-top: 1px dashed var(--border-color); padding-top: 10px; margin-top: 8px;">
+                    <button class="btn btn-sm" onclick="event.stopPropagation(); saleConfirmStudent('${st.id}', '${st.name.replace(/'/g, "\\'")}')" style="background: rgba(16,185,129,0.15); color: #059669; font-size: 12px; padding: 5px 12px; border: 1px solid rgba(16,185,129,0.3); font-weight: 600;">
+                        <i class="fa-solid fa-circle-check"></i> Xác nhận HĐ
+                    </button>
+                </div>
+                ` : ''}
+            </div>
+        `;
+    });
+    list.innerHTML = htmlParts;
+}
+// Bổ sung/sửa thông tin HV
+// Xem lịch sử điểm danh của HV
+window.showAttendanceHistory = async function (studentId, btnEl) {
+    const container = document.getElementById('att-history-' + studentId);
+    if (!container) return;
+    if (container.style.display !== 'none') {
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = 'block';
+    container.innerHTML = '<div style="text-align:center; padding:8px; color:var(--text-muted); font-size:12px;"><i class="fa-solid fa-spinner fa-spin"></i> Đang tải...</div>';
+    try {
+        const attSnap = await db.collection('attendance')
+            .where('studentId', '==', studentId)
+            .get();
+        const attDocs = attSnap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .sort((a, b) => {
+                const ta = (a.createdAt || a.timestamp)?.toDate ? (a.createdAt || a.timestamp).toDate().getTime() : 0;
+                const tb = (b.createdAt || b.timestamp)?.toDate ? (b.createdAt || b.timestamp).toDate().getTime() : 0;
+                return tb - ta;
+            })
+            .slice(0, 30);
+        if (attDocs.length === 0) {
+            container.innerHTML = '<div style="font-size:12px; color:var(--text-muted); padding:6px;">Chưa có lịch sử điểm danh.</div>';
+            return;
+        }
+        let html = '<div style="font-size:12px; font-weight:600; color:var(--text-color); margin-bottom:6px;"><i class="fa-solid fa-clock-rotate-left"></i> Lịch sử điểm danh (gần nhất):</div>';
+        html += '<div style="max-height:200px; overflow-y:auto; border:1px solid var(--border-color); border-radius:8px;">';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:11px;">';
+        html += `<thead><tr style="background:rgba(37,99,235,0.05);"><th style="padding:5px 8px; text-align:left;">Ngày giờ</th><th style="padding:5px 8px; text-align:left;">Người ĐD</th><th style="padding:5px 8px; text-align:center;">Buổi</th>${currentUserRole === 'ADMIN' ? '<th style="padding:5px 8px; text-align:center;">Xoá</th>' : ''}</tr></thead><tbody>`;
+        let rowNum = 0;
+        attDocs.forEach(d => {
+            const rawTs = d.createdAt || d.timestamp;
+            const ts = rawTs?.toDate ? rawTs.toDate() : (rawTs ? new Date(rawTs) : null);
+            const dateStr = ts ? ts.toLocaleDateString('vi-VN', { day:'2-digit', month:'2-digit', year:'numeric' }) : '?';
+            const timeStr = ts ? ts.toLocaleTimeString('vi-VN', { hour:'2-digit', minute:'2-digit' }) : '';
+            const marker = d.checkedByName || d.markedByName || d.teacherName || '—';
+            rowNum++;
+            html += `<tr style="border-top:1px solid var(--border-color); ${rowNum % 2 === 0 ? 'background:rgba(0,0,0,0.02);' : ''}">
+                <td style="padding:4px 8px;">${dateStr} ${timeStr}</td>
+                <td style="padding:4px 8px;">${marker}</td>
+                <td style="padding:4px 8px; text-align:center;">${d.sessionNumber || rowNum}</td>
+                ${currentUserRole === 'ADMIN' ? `<td style="padding:4px 8px; text-align:center;">
+                    <button onclick="event.stopPropagation(); deleteAttendanceRecord('${d.id}', '${studentId}', '${dateStr} ${timeStr}', ${d.sessionNumber || rowNum})"
+                        style="border:none; background:rgba(239,68,68,0.1); color:#ef4444; cursor:pointer; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:600;"
+                        title="Xoá buổi điểm danh này">🗑</button>
+                </td>` : ''}
+            </tr>`;
+        });
+        html += '</tbody></table></div>';
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = `<div style="font-size:11px; color:#ef4444; padding:6px;">Lỗi: ${e.message}</div>`;
+    }
+};
+
+// Xoá 1 record điểm danh (chỉ ADMIN)
+window.deleteAttendanceRecord = async function (attDocId, studentId, dateTimeStr, sessionNum) {
+    if (currentUserRole !== 'ADMIN') return alert('Chỉ Admin mới được xoá!');
+    if (!confirm(`⚠️ XÁC NHẬN XOÁ BUỔI ĐIỂM DANH\n\n🗓 Ngày: ${dateTimeStr}\n📌 Buổi số: ${sessionNum}\n\nĐiều này sẽ:\n• Xoá record điểm danh\n• Trừ 1 buổi học cho HV\n\nBạn chắc chắn?`)) return;
+
+    try {
+        await db.collection('attendance').doc(attDocId).delete();
+
+        const stDoc = await db.collection('students').doc(studentId).get();
+        if (stDoc.exists) {
+            const currentSessions = stDoc.data().sessions || 0;
+            await db.collection('students').doc(studentId).update({
+                sessions: Math.max(0, currentSessions - 1)
+            });
+        }
+
+        alert(`✅ Đã xoá buổi điểm danh ngày ${dateTimeStr}!\nSố buổi đã được cập nhật.`);
+
+        // Re-sync toàn bộ điểm danh cho HV này lên Sheet (rebuild cột)
+        try {
+            const stuSync = await db.collection('students').doc(studentId).get();
+            const stuData = stuSync.exists ? stuSync.data() : {};
+            if (stuData.contractNumber) {
+                const brName = FIXED_BRANCHES.find(b => b.id === stuData.branchId)?.name || 'Khác';
+                const attRecords = await db.collection('attendance').where('studentId', '==', studentId).get();
+                const dates = attRecords.docs
+                    .map(d => ({ ts: d.data().createdAt?.toDate?.()?.getTime() || 0, date: d.data().createdAt?.toDate?.()?.toLocaleDateString('vi-VN') || '' }))
+                    .sort((a, b) => a.ts - b.ts)
+                    .map(r => r.date);
+                // Xoá cột cũ rồi ghi lại
+                const totalSessions = stuData.totalSessions || 10;
+                const allDates = [...dates];
+                for (let i = dates.length; i < totalSessions; i++) allDates.push(''); // xoá cột thừa
+                syncToGoogleSheet({
+                    action: 'syncAttendanceBulk',
+                    branchName: brName,
+                    contractNumber: stuData.contractNumber,
+                    dates: allDates
+                });
+            }
+        } catch (e) { console.warn('Sheet delete sync error:', e); }
+
+        const container = document.getElementById('att-history-' + studentId);
+        if (container) {
+            container.style.display = 'none';
+            showAttendanceHistory(studentId);
+        }
+        if (typeof renderManageStudents === 'function') renderManageStudents();
+    } catch (e) {
+        alert('Lỗi: ' + e.message);
+    }
+};
+
+window.editStudentInfo = async function (studentId) {
+    const st = localState.students.find(s => s.id === studentId);
+    if (!st) return alert('Không tìm thấy học viên!');
+
+    const isAdmin = currentUserRole === 'ADMIN';
+    const isManager = currentUserRole === 'MANAGER';
+    const isSale = currentUserRole === 'SALE';
+    const updates = {};
+    const hasFullEditRight = isAdmin || isManager;
+
+    // 1. Tên HV - Admin và Manager
+    if (hasFullEditRight) {
+        const name = prompt(`📝 Tên hiện tại: ${st.name}\nNhập tên mới (bỏ trống = giữ nguyên):`, st.name || '');
+        if (name === null) return;
+        if (name.trim() && name.trim() !== st.name) updates.name = name.trim();
+    }
+
+    // 2. Số HĐ - Admin và Manager
+    if (hasFullEditRight) {
+        const contract = prompt(`📄 Số HĐ hiện tại: ${st.contractNumber || 'Chưa có'}\nNhập số HĐ mới (bỏ trống = giữ nguyên):`, st.contractNumber || '');
+        if (contract === null) return;
+        if (contract.trim() && contract.trim() !== st.contractNumber) updates.contractNumber = contract.trim();
+    }
+
+    // 3. SĐT - tất cả
+    const phone = prompt(`📱 SĐT hiện tại: ${st.phone || 'Chưa có'}\nNhập SĐT mới (bỏ trống = giữ nguyên):`, st.phone || '');
+    if (phone === null) return;
+    if (phone.trim()) updates.phone = phone.trim();
+
+    // 4. Giới tính - tất cả
+    const gender = prompt(`👤 Giới tính hiện tại: ${st.gender || 'Nam'}\nNhập: Nam / Nữ (bỏ trống = giữ nguyên):`, st.gender || 'Nam');
+    if (gender === null) return;
+    if (gender.trim() && (gender.trim() === 'Nam' || gender.trim() === 'Nữ')) updates.gender = gender.trim();
+
+    // 5. Kiểu bơi - Admin + Sale + Manager
+    if (isAdmin || isSale || isManager) {
+        const curTypes = ['Bơi Ếch', 'Bơi Sải', 'Ếch Vip', 'Sải Vip', 'Bơi Ngửa', 'Bơi Bướm', 'PT'];
+        const curriculum = prompt(`🏊 Kiểu bơi hiện tại: ${st.curriculum || 'Bơi Ếch'}\nChọn: ${curTypes.join(' / ')}\n(bỏ trống = giữ nguyên):`, st.curriculum || 'Bơi Ếch');
+        if (curriculum === null) return;
+        if (curriculum.trim() && curTypes.includes(curriculum.trim())) updates.curriculum = curriculum.trim();
+    }
+
+    // 6. Nhóm tuổi - Admin + Sale + Manager
+    if (isAdmin || isSale || isManager) {
+        const ageCategory = prompt(`👶 Nhóm tuổi hiện tại: ${st.ageCategory || 'Trẻ em'}\nNhập: Trẻ em / Người lớn (bỏ trống = giữ nguyên):`, st.ageCategory || 'Trẻ em');
+        if (ageCategory === null) return;
+        if (ageCategory.trim() && (ageCategory.trim() === 'Trẻ em' || ageCategory.trim() === 'Người lớn')) updates.ageCategory = ageCategory.trim();
+    }
+
+    // 7. Số tuổi - tất cả
+    const ageStr = prompt(`🎂 Số tuổi hiện tại: ${st.age || 'Chưa có'}\nNhập số tuổi (bỏ trống = giữ nguyên):`, st.age || '');
+    if (ageStr === null) return;
+    if (ageStr.trim() && parseInt(ageStr)) updates.age = parseInt(ageStr);
+
+    // 8. Tổng số buổi + Số buổi đã học - Admin + Manager
+    if (hasFullEditRight) {
+        const totalStr = prompt(`📦 Tổng số buổi khoá học: ${st.totalSessions || 10}\nNhập tổng buổi mới (bỏ trống = giữ nguyên):`, st.totalSessions || 10);
+        if (totalStr === null) return;
+        const newTotal = parseInt(totalStr);
+        if (!isNaN(newTotal) && newTotal > 0 && newTotal !== (st.totalSessions || 10)) {
+            updates.totalSessions = newTotal;
+        }
+
+        const currentTotal = updates.totalSessions || st.totalSessions || 10;
+        const sessStr = prompt(`📋 Số buổi đã học: ${st.sessions || 0} / ${currentTotal}\nNhập số buổi mới (bỏ trống = giữ nguyên):`, st.sessions || 0);
+        if (sessStr === null) return;
+        const newSess = parseInt(sessStr);
+        if (!isNaN(newSess) && newSess >= 0 && newSess <= currentTotal && newSess !== st.sessions) {
+            updates.sessions = newSess;
+        } else if (!isNaN(newSess) && (newSess < 0 || newSess > currentTotal)) {
+            alert(`⚠️ Số buổi phải từ 0 đến ${currentTotal}!`);
+            return;
+        }
+    }
+
+    if (Object.keys(updates).length === 0) return alert('Không có thay đổi nào.');
+
+    try {
+        await db.collection('students').doc(studentId).update(updates);
+
+        // Nếu Admin trừ buổi → xoá bản ghi điểm danh gần nhất
+        if (isAdmin && updates.sessions !== undefined && updates.sessions < (st.sessions || 0)) {
+            const diff = (st.sessions || 0) - updates.sessions;
+            try {
+                const attSnap = await db.collection('attendance')
+                    .where('studentId', '==', studentId)
+                    .get();
+                // Sort in JS
+                const sortedDocs = attSnap.docs.sort((a, b) => {
+                    const tA = a.data().createdAt?.toDate?.()?.getTime() || 0;
+                    const tB = b.data().createdAt?.toDate?.()?.getTime() || 0;
+                    return tB - tA;
+                }).slice(0, diff);
+                const batch = db.batch();
+                sortedDocs.forEach(doc => batch.delete(doc.ref));
+                await batch.commit();
+            } catch (attErr) {
+                console.warn('Xoá attendance lỗi (có thể cần index):', attErr);
+                // Fallback: query without orderBy
+                try {
+                    const fallback = await db.collection('attendance')
+                        .where('studentId', '==', studentId)
+                        .get();
+                    const sorted = fallback.docs
+                        .filter(d => d.data().createdAt)
+                        .sort((a, b) => b.data().createdAt.toMillis() - a.data().createdAt.toMillis());
+                    const batch2 = db.batch();
+                    sorted.slice(0, diff).forEach(doc => batch2.delete(doc.ref));
+                    await batch2.commit();
+                } catch (e2) { console.warn('Fallback also failed:', e2); }
+            }
+        }
+
+        // Auto sync lên Google Sheet (chỉ HV này)
+        try {
+            const updatedDoc = await db.collection('students').doc(studentId).get();
+            const updatedSt = updatedDoc.data();
+            syncToGoogleSheet({
+                action: 'updateOrInsert',
+                data: {
+                    name: updatedSt.name || '',
+                    phone: updatedSt.phone || '',
+                    contractNumber: updatedSt.contractNumber || '',
+                    swimType: updatedSt.swimType || '',
+                    ageGroup: updatedSt.ageGroup || '',
+                    teacherName: updatedSt.teacherName || '',
+                    saleName: updatedSt.saleName || '',
+                    sessions: updatedSt.sessions || 0,
+                    branchName: updatedSt.branchName || '',
+                    contractDate: updatedSt.contractDate || ''
+                }
+            });
+        } catch (syncErr) {
+            console.warn('Sync Sheet sau edit:', syncErr);
+        }
+
+        alert('✅ Đã cập nhật thông tin!' + (updates.sessions !== undefined && updates.sessions < (st.sessions || 0) ? `\n📋 Đã xoá ${(st.sessions || 0) - updates.sessions} bản ghi điểm danh gần nhất.\n📤 Đã sync lên Sheet.` : '\n📤 Đã sync lên Sheet.'));
+    } catch (e) {
+        alert('Lỗi cập nhật: ' + e.message);
+    }
+};
+
+// Xóa học viên (chỉ ADMIN)
+window.deleteStudent = async function (studentId, studentName, teacherId) {
+    if (!confirm(`⚠️ Xác nhận XÓA học viên "${studentName}"?\n\nHành động này không thể hoàn tác!`)) return;
+
+    try {
+        // Lấy data trước khi xóa
+        const doc = await db.collection('students').doc(studentId).get();
+        const data = doc.exists ? doc.data() : {};
+
+        // Xóa video nếu có
+        if (data.completionVideoUrl) {
+            try {
+                const fileRef = storage.refFromURL(data.completionVideoUrl);
+                await fileRef.delete();
+            } catch (e) { console.warn('Delete video:', e); }
+        }
+
+        // Xóa tất cả attendance records
+        try {
+            const attSnap = await db.collection('attendance').where('studentId', '==', studentId).get();
+            const batch = db.batch();
+            attSnap.docs.forEach(d => batch.delete(d.ref));
+            if (attSnap.size > 0) await batch.commit();
+        } catch (e) { console.warn('Delete attendance:', e); }
+
+        // Xóa student doc
+        await db.collection('students').doc(studentId).delete();
+
+        // Thông báo cho GV
+        if (teacherId) {
+            sendNotification(teacherId, 'system', `🗑️ Admin đã xóa học viên "${studentName}"${data.contractNumber ? ' (HĐ: ' + data.contractNumber + ')' : ''} khỏi danh sách của bạn.`);
+        }
+
+        // Thông báo cho Sale (nếu có)
+        if (data.createdBy && data.createdBy !== teacherId) {
+            sendNotification(data.createdBy, 'system', `🗑️ Admin đã xóa HĐ "${data.contractNumber || studentName}" khỏi hệ thống.`);
+        }
+
+        alert(`✅ Đã xóa học viên "${studentName}" và toàn bộ dữ liệu liên quan (điểm danh, video, HĐ)!`);
+    } catch (err) {
+        alert('❌ Lỗi: ' + err.message);
+    }
+};
+
+// Chuyển nhượng học viên sang GV khác
+window.transferStudent = async function (studentId, studentName, currentTeacherId) {
+    // Lấy danh sách GV cùng cơ sở (trừ GV hiện tại)
+    const otherTeachers = localState.teachers.filter(t => t.id !== currentTeacherId);
+    if (otherTeachers.length === 0) {
+        alert('Không có giáo viên khác trong cơ sở này để chuyển nhượng!');
+        return;
+    }
+
+    // Tạo danh sách chọn
+    let options = otherTeachers.map((t, i) => `${i + 1}. ${t.name} (${t.teacherType || 'Chính'})`).join('\n');
+    const choice = prompt(`🔄 Chuyển nhượng HV: ${studentName}\n\nChọn giáo viên nhận (nhập số):\n${options}`);
+    if (!choice) return;
+
+    const idx = parseInt(choice) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= otherTeachers.length) {
+        alert('Lựa chọn không hợp lệ!');
+        return;
+    }
+
+    const newTeacher = otherTeachers[idx];
+    const currentTeacher = localState.teachers.find(t => t.id === currentTeacherId);
+    const fromName = currentTeacher ? currentTeacher.name : 'GV cũ';
+
+    if (!confirm(`Xác nhận chuyển nhượng HV "${studentName}" từ ${fromName} ➜ ${newTeacher.name}?\n\nMọi thông tin, số buổi, tiến trình sẽ được giữ nguyên.`)) return;
+
+    try {
+        // Cập nhật student document
+        await db.collection('students').doc(studentId).update({
+            assignedTeacherId: newTeacher.id,
+            transferredFrom: currentTeacherId,
+            transferredByName: fromName,
+            transferredAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Cập nhật TẤT CẢ attendance records sang GV mới
+        let attUpdated = 0;
+        try {
+            const attSnap = await db.collection('attendance')
+                .where('studentId', '==', studentId)
+                .get();
+            if (!attSnap.empty) {
+                const batch = db.batch();
+                attSnap.forEach(doc => {
+                    batch.update(doc.ref, {
+                        teacherId: newTeacher.id,
+                        teacherName: newTeacher.name
+                    });
+                });
+                await batch.commit();
+                attUpdated = attSnap.size;
+            }
+        } catch (attErr) {
+            console.warn('Lỗi cập nhật attendance khi chuyển GV:', attErr);
+        }
+
+        // Gửi thông báo cho GV nhận
+        await db.collection('notifications').add({
+            toUserId: newTeacher.id,
+            type: 'transfer',
+            message: `🔄 Bạn nhận chuyển nhượng HV "${studentName}" từ ${fromName}. Số buổi và tiến trình giữ nguyên.`,
+            read: false,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Sync lên Google Sheet (cập nhật GV mới)
+        try {
+            const updatedDoc = await db.collection('students').doc(studentId).get();
+            const updatedSt = updatedDoc.data();
+            syncToGoogleSheet({
+                action: 'updateOrInsert',
+                data: {
+                    name: updatedSt.name || '',
+                    phone: updatedSt.phone || '',
+                    contractNumber: updatedSt.contractNumber || '',
+                    swimType: updatedSt.swimType || '',
+                    ageGroup: updatedSt.ageGroup || '',
+                    teacherName: newTeacher.name || '',
+                    saleName: updatedSt.saleName || '',
+                    sessions: updatedSt.sessions || 0,
+                    branchName: updatedSt.branchName || '',
+                    contractDate: updatedSt.contractDate || ''
+                }
+            });
+        } catch (syncErr) { console.warn('Sheet sync transfer:', syncErr); }
+
+        alert(`✅ Đã chuyển nhượng "${studentName}" cho ${newTeacher.name} thành công!${attUpdated > 0 ? `\n📋 Đã cập nhật ${attUpdated} bản ghi điểm danh` : ''}\n📤 Đã đồng bộ lên Sheet.`);
+    } catch (e) {
+        console.error(e);
+        alert('Lỗi: ' + e.message);
+    }
+};
+
+// ===================== UPLOAD VIDEO KẾT THÚC KHÓA HỌC ===================== //
+window.uploadCompletionVideo = function (studentId, studentName) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'video/*';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        // Validate file
+        if (!file.type.startsWith('video/')) {
+            alert('❌ Vui lòng chọn file video!');
+            return;
+        }
+        if (file.size > 100 * 1024 * 1024) {
+            alert('❌ Video quá lớn! Tối đa 100MB.\nGợi ý: Quay video 1-2 phút, chất lượng 720p.');
+            return;
+        }
+
+        const confirmUpload = confirm(`📹 Upload video kết thúc khóa cho "${studentName}"?\n\nFile: ${file.name}\nDung lượng: ${(file.size / 1024 / 1024).toFixed(1)} MB`);
+        if (!confirmUpload) return;
+
+        // Tạo overlay progress
+        const overlay = document.createElement('div');
+        overlay.id = 'upload-overlay';
+        overlay.innerHTML = `
+            <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 9999; display: flex; align-items: center; justify-content: center;">
+                <div style="background: var(--card-bg); border-radius: 16px; padding: 30px 40px; text-align: center; min-width: 300px;">
+                    <i class="fa-solid fa-cloud-arrow-up" style="font-size: 36px; color: #7c3aed; margin-bottom: 12px;"></i>
+                    <div style="font-weight: 600; font-size: 16px; color: var(--text-color); margin-bottom: 8px;">Đang upload video...</div>
+                    <div id="upload-progress-text" style="font-size: 14px; color: var(--text-muted); margin-bottom: 12px;">0%</div>
+                    <div style="width: 100%; height: 8px; background: rgba(0,0,0,0.1); border-radius: 4px; overflow: hidden;">
+                        <div id="upload-progress-bar" style="width: 0%; height: 100%; background: #7c3aed; transition: width 0.3s;"></div>
+                    </div>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+
+        try {
+            const ext = file.name.split('.').pop();
+            const ref = storage.ref(`completion-videos/${studentId}.${ext}`);
+            const uploadTask = ref.put(file);
+
+            uploadTask.on('state_changed',
+                (snapshot) => {
+                    const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+                    const bar = document.getElementById('upload-progress-bar');
+                    const txt = document.getElementById('upload-progress-text');
+                    if (bar) bar.style.width = pct + '%';
+                    if (txt) txt.textContent = pct + '%';
+                },
+                (error) => {
+                    overlay.remove();
+                    alert('❌ Lỗi upload: ' + error.message);
+                },
+                async () => {
+                    const downloadUrl = await uploadTask.snapshot.ref.getDownloadURL();
+                    await db.collection('students').doc(studentId).update({
+                        completionVideoUrl: downloadUrl,
+                        videoUploadedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    overlay.remove();
+                    alert('✅ Upload video thành công cho "' + studentName + '"!');
+                }
+            );
+        } catch (err) {
+            overlay.remove();
+            alert('❌ Lỗi: ' + err.message);
+        }
+    };
+    input.click();
+};
+
+// Tự động dọn video hết hạn (> 10 ngày)
+async function cleanupExpiredVideos() {
+    try {
+        const snap = await db.collection('students').where('completionVideoUrl', '!=', '').get();
+        const now = Date.now();
+        const TEN_DAYS = 10 * 24 * 60 * 60 * 1000;
+
+        for (const doc of snap.docs) {
+            const data = doc.data();
+            if (!data.completionVideoUrl || !data.videoUploadedAt) continue;
+            const uploadTime = data.videoUploadedAt.toDate ? data.videoUploadedAt.toDate().getTime() : data.videoUploadedAt;
+            if (now - uploadTime > TEN_DAYS) {
+                // Xóa file trên Storage
+                try {
+                    const fileRef = storage.refFromURL(data.completionVideoUrl);
+                    await fileRef.delete();
+                } catch (e) { console.warn('Storage delete:', e); }
+                // Xóa URL trong Firestore
+                await db.collection('students').doc(doc.id).update({
+                    completionVideoUrl: firebase.firestore.FieldValue.delete(),
+                    videoUploadedAt: firebase.firestore.FieldValue.delete()
+                });
+                console.log('🗑️ Đã xóa video hết hạn:', data.name || doc.id);
+            }
+        }
+    } catch (e) { console.warn('Cleanup expired videos:', e); }
+}
+// Cleanup video hết hạn sẽ được gọi sau khi auth hoàn tất (xem onAuthStateChanged)
+
+// ===================== LỄ TÂN - ĐIỂM DANH ===================== //
+
+// Tìm kiếm học viên cho điểm danh
+window.searchStudentForAttendance = async function (query) {
+    const container = document.getElementById('letan-results');
+    if (!container) return;
+
+    if (!query || query.trim().length < 2) {
+        container.innerHTML = `<div style="text-align: center; padding: 40px; color: var(--text-muted);">
+            <i class="fa-solid fa-magnifying-glass" style="font-size: 28px; display: block; margin-bottom: 10px;"></i>
+            Nhập tên hoặc SĐT học viên để tìm kiếm
+        </div>`;
+        return;
+    }
+
+    const q = query.trim().toLowerCase();
+    const results = localState.students.filter(s =>
+        s.name.toLowerCase().includes(q) || (s.phone && s.phone.includes(q)) || (s.contractNumber && s.contractNumber.toLowerCase().includes(q))
+    );
+
+    if (results.length === 0) {
+        container.innerHTML = `<div style="text-align: center; padding: 30px; color: var(--text-muted);">
+            <i class="fa-solid fa-user-slash" style="font-size: 24px; display: block; margin-bottom: 8px;"></i>
+            Không tìm thấy học viên "${query}"
+        </div>`;
+        return;
+    }
+
+    // Build teacher name lookup
+    const teacherMap = {};
+    localState.teachers.forEach(t => { teacherMap[t.id] = t.name; });
+
+    // Lấy attendance gần đây (20 phút) để hiện nút Huỷ
+    const now = new Date();
+    const twentyMinAgo = new Date(now.getTime() - 20 * 60 * 1000);
+    let recentAttMap = {}; // studentId -> { docId, time }
+    try {
+        const attSnap = await db.collection('attendance')
+            .where('branchId', '==', currentBranchId)
+            .get();
+        attSnap.forEach(doc => {
+            const d = doc.data();
+            const t = d.createdAt?.toDate();
+            if (t && t >= twentyMinAgo) {
+                if (!recentAttMap[d.studentId] || t > recentAttMap[d.studentId].time) {
+                    recentAttMap[d.studentId] = { docId: doc.id, time: t, session: d.sessionNumber };
+                }
+            }
+        });
+    } catch (e) { console.warn('Recent att query:', e); }
 
 
-// ==================== LETAN MODULE - ĐÃ TÁCH RA js/letan.js ====================
-// Code gốc backup tại: app.js.backup_20250415 (dòng 1826~2561)
-// ================================================================================
+    // Build sale name lookup
+    const saleMap = {};
+    try {
+        const usersSnap = await db.collection('users').get();
+        usersSnap.forEach(doc => { saleMap[doc.id] = doc.data().name || doc.data().email || ''; });
+    } catch (e) { console.warn('Sale map error:', e); }
+
+    container.innerHTML = results.map(st => {
+        const total = st.totalSessions || 10;
+        const percent = Math.min((st.sessions / total) * 100, 100);
+        const isDone = st.sessions >= total;
+        const teacherName = teacherMap[st.assignedTeacherId] || 'Chưa gán';
+        const curType = st.curriculum || 'Bơi Ếch';
+        const recent = recentAttMap[st.id];
+        const canCancel = !!recent;
+        const cancelRemain = canCancel ? Math.max(0, Math.ceil((recent.time.getTime() + 20 * 60 * 1000 - now.getTime()) / 60000)) : 0;
+        const saleName = st.saleConfirmedBy || st.creatorName || (st.creatorId ? saleMap[st.creatorId] : '') || '';
+
+        return `
+        <div style="padding: 14px; background: var(--card-bg); border: 1px solid ${isDone ? 'rgba(239,68,68,0.2)' : 'var(--border-color)'}; border-radius: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 0;">
+                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                        <span style="font-weight: 600; font-size: 15px;">${st.name}</span>
+                        <span style="font-size: 11px; color: #f59e0b; font-weight: 500;">${curType}</span>
+                        ${st.transferredFrom ? '<span style="font-size: 10px; background: rgba(245,158,11,0.15); color: #d97706; padding: 1px 5px; border-radius: 8px;">🔄 CN</span>' : ''}
+                        ${isDivingCurriculum(curType) ? (st.waiverSigned
+                            ? `<span onclick="viewSignedWaiver('${st.id}', '${st.name.replace(/'/g, "\\\\'")}')" style="font-size: 10px; background: rgba(16,185,129,0.15); color: #059669; padding: 1px 5px; border-radius: 8px; cursor:pointer;">✅ Đã ký CK</span>`
+                            : '<span style="font-size: 10px; background: rgba(239,68,68,0.15); color: #dc2626; padding: 1px 5px; border-radius: 8px; font-weight:600;">❌ Chưa ký CK</span>')
+                        : ''}
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 3px;">
+                        <i class="fa-solid fa-person-swimming"></i> GV: <strong style="color: var(--primary);">${teacherName}</strong>
+                        ${st.phone ? ` · <i class="fa-solid fa-phone"></i> ${st.phone}` : ''}
+                        ${st.contractNumber ? ` · <i class="fa-solid fa-file-contract"></i> HĐ: ${st.contractNumber}` : ''}
+                    </div>
+                    ${saleName ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                        <i class="fa-solid fa-user-tie"></i> Sale: <strong>${saleName}</strong>
+                    </div>` : ''}
+                    <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+                        <div style="flex: 1; height: 6px; background: rgba(0,0,0,0.1); border-radius: 3px; overflow: hidden;">
+                            <div style="width: ${percent}%; height: 100%; background: ${isDone ? '#ef4444' : '#3b82f6'};"></div>
+                        </div>
+                        <span style="font-size: 13px; font-weight: 600; color: ${isDone ? '#ef4444' : 'var(--text-color)'};">${st.sessions}/${total}</span>
+                    </div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-end;">
+                    <button onclick="markAttendance('${st.id}', '${st.name.replace(/'/g, "\\'")}', ${st.sessions}, ${total}, '${st.assignedTeacherId}')" 
+                        ${isDone ? 'disabled' : ''}
+                        style="padding: 10px 16px; border-radius: 8px; border: none; cursor: ${isDone ? 'not-allowed' : 'pointer'}; font-weight: 600; font-size: 13px;
+                        background: ${isDone ? 'rgba(0,0,0,0.1)' : 'rgba(139,92,246,0.15)'}; color: ${isDone ? 'var(--text-muted)' : '#8b5cf6'}; 
+                        border: 1px solid ${isDone ? 'transparent' : 'rgba(139,92,246,0.3)'}; white-space: nowrap;">
+                        <i class="fa-solid fa-clipboard-check"></i> ${isDone ? 'Hoàn thành' : 'Điểm danh'}
+                    </button>
+                    ${canCancel ? `
+                    <button onclick="cancelAttendance('${st.id}', '${st.name.replace(/'/g, "\\'")}', '${recent.docId}', ${st.sessions})"
+                        style="padding: 6px 12px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; font-size: 11px;
+                        background: rgba(239,68,68,0.12); color: #ef4444; border: 1px solid rgba(239,68,68,0.25); white-space: nowrap;">
+                        <i class="fa-solid fa-xmark"></i> Huỷ buổi học (${cancelRemain}p)
+                    </button>` : ''}
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+};
+
+// Huỷ buổi học (trong 20 phút sau khi điểm danh)
+window.cancelAttendance = async function (studentId, studentName, attDocId, currentSessions) {
+    if (currentSessions <= 0) return alert('Học viên chưa điểm danh buổi nào!');
+    if (!confirm(`⚠️ Huỷ buổi học cho "${studentName}"?\n\nSố buổi sẽ giảm từ ${currentSessions} → ${currentSessions - 1}.\nGiáo viên sẽ nhận thông báo.`)) return;
+
+    try {
+        // Giảm 1 buổi
+        await db.collection('students').doc(studentId).update({
+            sessions: firebase.firestore.FieldValue.increment(-1)
+        });
+
+        // Xoá bản ghi điểm danh
+        await db.collection('attendance').doc(attDocId).delete();
+
+        // Thông báo GV
+        const st = localState.students.find(s => s.id === studentId);
+        if (st && st.assignedTeacherId) {
+            sendNotification(st.assignedTeacherId, 'system', `❌ Lễ tân đã huỷ buổi học của HV "${studentName}" (${currentSessions} → ${currentSessions - 1}). GV báo bận.`);
+        }
+
+        alert(`✅ Đã huỷ buổi học cho "${studentName}" — còn ${currentSessions - 1} buổi.`);
+
+        // Sync xoá cột điểm danh trên Google Sheet
+        try {
+            const stuDocCancel = await db.collection('students').doc(studentId).get();
+            const stuCancel = stuDocCancel.exists ? stuDocCancel.data() : {};
+            if (stuCancel.contractNumber) {
+                const brName = FIXED_BRANCHES.find(b => b.id === (stuCancel.branchId || currentBranchId))?.name || 'Khác';
+                syncToGoogleSheet({
+                    action: 'markAttendance',
+                    branchName: brName,
+                    contractNumber: stuCancel.contractNumber,
+                    sessionNumber: currentSessions, // buổi vừa huỷ = currentSessions (đã giảm 1)
+                    date: ''  // Ghi rỗng = xoá
+                });
+            }
+        } catch (e) { console.warn('Sheet cancel sync error:', e); }
+
+        // Refresh
+        const searchInput = document.getElementById('letan-search');
+        if (searchInput && searchInput.value) {
+            setTimeout(() => searchStudentForAttendance(searchInput.value), 500);
+        }
+        setTimeout(() => renderLetanManageTable(), 600);
+    } catch (e) {
+        console.error(e);
+        alert('Lỗi: ' + e.message);
+    }
+};
+
+// Điểm danh - tích 1 buổi cho học viên
+window.markAttendance = async function (studentId, studentName, currentSessions, totalSessions, teacherId) {
+    if (currentSessions >= totalSessions) {
+        alert('Học viên đã hoàn thành khóa học!');
+        return;
+    }
+
+    // Kiểm tra waiver cho môn Lặn
+    try {
+        const stDoc = await db.collection('students').doc(studentId).get();
+        const stData = stDoc.data();
+        if (stData && isDivingCurriculum(stData.curriculum) && !stData.waiverSigned) {
+            alert(`⚠️ HV "${studentName}" chưa ký Cam kết miễn trừ trách nhiệm!\n\nYêu cầu khách hàng tra cứu hợp đồng và ký cam kết trước khi học Lặn.`);
+            return;
+        }
+    } catch (e) { console.warn('Waiver check error:', e); }
+
+    const teacherName = localState.teachers.find(t => t.id === teacherId)?.name || 'GV';
+
+    // Kiểm tra GV có báo bận không
+    try {
+        const teacherDoc = await db.collection('users').doc(teacherId).get();
+        if (teacherDoc.exists && teacherDoc.data().isBusy) {
+            alert(`⚠️ GV "${teacherName}" hiện KHÔNG CÓ Ở BỂ (đang báo bận).\n\nVui lòng yêu cầu HV "${studentName}" liên hệ lại với GV "${teacherName}" để sắp xếp lịch học.`);
+            return;
+        }
+    } catch (e) { console.warn('Busy check error:', e); }
+
+    // Kiểm tra GV có đang full lớp không (max 7 HV/ca = 60 phút)
+    try {
+        const now = new Date();
+        const sixtyMinAgo = new Date(now.getTime() - 60 * 60 * 1000);
+        const attSnap = await db.collection('attendance')
+            .where('branchId', '==', currentBranchId)
+            .get();
+
+        // Đếm HV đang học trong 60 phút gần nhất (unique student) cho GV này
+        const activeStudents = new Set();
+        attSnap.forEach(doc => {
+            const d = doc.data();
+            if (d.teacherId !== teacherId) return;
+            const t = d.createdAt?.toDate();
+            if (t && t >= sixtyMinAgo) {
+                activeStudents.add(d.studentId);
+            }
+        });
+
+        if (activeStudents.size >= 7) {
+            const proceed = confirm(
+                `⚠️ CẢNH BÁO: GV "${teacherName}" đang FULL LỚP!\n\n` +
+                `Hiện tại: ${activeStudents.size}/7 học viên đang học.\n\n` +
+                `🔸 Bấm "Huỷ" → Báo HV chờ ca tiếp theo\n` +
+                `🔸 Bấm "OK" → Xác nhận điểm danh (đã hẹn với GV)\n\n` +
+                `Học viên đã có hẹn trước với GV "${teacherName}"?`
+            );
+            if (!proceed) {
+                alert(`ℹ️ Đã huỷ. Vui lòng báo HV "${studentName}" chờ ca tiếp theo của GV "${teacherName}".`);
+                return;
+            }
+        }
+    } catch (e) { console.warn('Capacity check error:', e); }
+
+    // Kiểm tra HV đã điểm danh hom nay chưa (tránh kích nhầm 2 buổi/ngày)
+    try {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayAttSnap = await db.collection('attendance')
+            .where('studentId', '==', studentId)
+            .where('branchId', '==', currentBranchId)
+            .get();
+        const todayRecords = [];
+        todayAttSnap.forEach(doc => {
+            const d = doc.data();
+            const t = d.createdAt?.toDate();
+            if (t && t >= todayStart) todayRecords.push(t);
+        });
+        if (todayRecords.length > 0) {
+            const lastTime = todayRecords.sort((a, b) => b - a)[0];
+            const timeStr = lastTime.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+            const proceed = confirm(
+                `⚠️ CẢNH BÁO: HV "${studentName}" ĐÃ ĐIỂM DANH HÔM NAY!\n\n` +
+                `Lần điểm danh gần nhất: ${timeStr}\n` +
+                `Tổng buổi hôm nay: ${todayRecords.length} buổi\n\n` +
+                `Bạn có CHẮC CHẮN muốn điểm danh thêm buổi nữa không?\n\n` +
+                `🔸 Bấm "OK" → Xác nhận điểm danh buổi thứ ${todayRecords.length + 1} trong ngày\n` +
+                `🔸 Bấm "Huỷ" → Không điểm danh`
+            );
+            if (!proceed) return;
+        }
+    } catch (e) { console.warn('Duplicate attendance check error:', e); }
+
+    // Kiểm tra HĐ 45 ngày
+    let expiryWarning = '';
+    try {
+        const stuDoc = await db.collection('students').doc(studentId).get();
+        const stuData = stuDoc.exists ? stuDoc.data() : {};
+        const firstLesson = stuData.firstLessonDate?.toDate ? stuData.firstLessonDate.toDate() : null;
+        if (firstLesson) {
+            const daysPassed = Math.floor((new Date() - firstLesson) / (1000 * 60 * 60 * 24));
+            const daysLeft = 45 - daysPassed;
+            if (daysLeft <= 0) {
+                expiryWarning = `\n\n🚨 CẢNH BÁO: HĐ đã QUÁ HẠN 45 ngày! (Đã ${daysPassed} ngày từ buổi đầu)`;
+            } else if (daysLeft <= 5) {
+                expiryWarning = `\n\n⚠️ CHÚ Ý: HĐ còn ${daysLeft} ngày nữa hết hạn 45 ngày!`;
+            }
+        }
+    } catch (e) { console.warn('45-day check error:', e); }
+
+    if (!confirm(`✅ Điểm danh: ${studentName}\n\nBuổi ${currentSessions + 1} / ${totalSessions}\nGiáo viên: ${teacherName}${expiryWarning}\n\nXác nhận?`)) return;
+
+    try {
+        // Lưu log điểm danh TRƯỚC
+        await db.collection('attendance').add({
+            studentId: studentId,
+            studentName: studentName,
+            teacherId: teacherId,
+            teacherName: teacherName,
+            sessionNumber: currentSessions + 1,
+            checkedBy: currentUserId,
+            checkedByName: currentUserDisplayName || 'Lễ tân',
+            branchId: currentBranchId,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Đếm CHÍNH XÁC số bản ghi attendance → cập nhật sessions
+        const attCountSnap = await db.collection('attendance')
+            .where('studentId', '==', studentId)
+            .get();
+        const actualCount = attCountSnap.size;
+
+        const updateData = { sessions: actualCount };
+        if (currentSessions === 0) {
+            updateData.firstLessonDate = firebase.firestore.FieldValue.serverTimestamp();
+        }
+        await db.collection('students').doc(studentId).update(updateData);
+
+        // Gửi thông báo cho GV xác nhận — kèm tên bể
+        const branchName = FIXED_BRANCHES.find(b => b.id === currentBranchId)?.name || 'cơ sở';
+        await sendNotification(teacherId, 'attendance', `📋 Lễ tân điểm danh HV "${studentName}" tại 🏊 ${branchName} (buổi ${currentSessions + 1}/${totalSessions}). Vui lòng xác nhận.`);
+
+        // Thông báo Sale khi HV hoàn thành buổi cuối
+        if (currentSessions + 1 >= totalSessions) {
+            try {
+                const stuDoc2 = await db.collection('students').doc(studentId).get();
+                const stu2 = stuDoc2.exists ? stuDoc2.data() : {};
+                const saleId = stu2.creatorId || stu2.saleId;
+                if (saleId) {
+                    await sendNotification(saleId, 'completion', `🎉 HV "${studentName}" đã hoàn thành ${totalSessions}/${totalSessions} buổi tại 🏊 ${branchName}! Khóa học kết thúc.`);
+                }
+            } catch (e) { console.warn('Notify sale completion error:', e); }
+        }
+
+        alert(`✅ Đã điểm danh "${studentName}" — Buổi ${currentSessions + 1}/${totalSessions}\n🏊 Học tại bể: ${branchName}${expiryWarning}`);
+
+        // Auto sync điểm danh lên Google Sheet (ghi vào cột "Buổi X")
+        try {
+            const stuDocSync = await db.collection('students').doc(studentId).get();
+            const contractNum = stuDocSync.exists ? stuDocSync.data().contractNumber : '';
+            if (contractNum) {
+                syncToGoogleSheet({
+                    action: 'markAttendance',
+                    branchName: branchName,
+                    contractNumber: contractNum,
+                    sessionNumber: currentSessions + 1,
+                    date: new Date().toLocaleDateString('vi-VN')
+                });
+            }
+        } catch (e) { console.warn('Sheet attendance sync error:', e); }
+
+        // Refresh kết quả tìm kiếm
+        const searchInput = document.getElementById('letan-search');
+        if (searchInput && searchInput.value) {
+            setTimeout(() => searchStudentForAttendance(searchInput.value), 500);
+        }
+        // Refresh bảng quản lý
+        setTimeout(() => renderLetanManageTable(), 600);
+    } catch (e) {
+        console.error(e);
+        alert('Lỗi: ' + e.message);
+    }
+};
+
+// ============ BẢNG QUẢN LÝ ĐIỂM DANH (LỄ TÂN) ============ //
+// Toggle Lễ Tân mode: Học viên vs CLB
+window.toggleLetanMode = function (isClb) {
+    const hvMode = document.getElementById('letan-hv-mode');
+    const clbMode = document.getElementById('letan-clb-mode');
+    const btnHv = document.getElementById('letan-btn-hv');
+    const btnClb = document.getElementById('letan-btn-clb');
+
+    if (isClb) {
+        if (hvMode) hvMode.style.display = 'none';
+        if (clbMode) clbMode.style.display = 'block';
+        if (btnHv) { btnHv.style.background = 'transparent'; btnHv.style.color = 'var(--text-muted)'; }
+        if (btnClb) { btnClb.style.background = 'var(--primary)'; btnClb.style.color = '#fff'; }
+    } else {
+        if (hvMode) hvMode.style.display = 'block';
+        if (clbMode) clbMode.style.display = 'none';
+        if (btnHv) { btnHv.style.background = 'var(--primary)'; btnHv.style.color = '#fff'; }
+        if (btnClb) { btnClb.style.background = 'transparent'; btnClb.style.color = 'var(--text-muted)'; }
+    }
+};
+
+window.renderLetanManageTable = async function () {
+    const container = document.getElementById('letan-manage-table');
+    if (!container || !currentBranchId) return;
+
+    const searchQ = (document.getElementById('letan-manage-search')?.value || '').trim().toLowerCase();
+
+    try {
+        // Lấy attendance logs của cơ sở
+        const snap = await db.collection('attendance')
+            .where('branchId', '==', currentBranchId)
+            .get();
+
+        // Gom theo studentId
+        const studentMap = {};
+        snap.forEach(doc => {
+            const d = doc.data();
+            if (!studentMap[d.studentId]) {
+                studentMap[d.studentId] = {
+                    name: d.studentName || '?',
+                    teacherName: d.teacherName || '?',
+                    logs: []
+                };
+            }
+            studentMap[d.studentId].logs.push({
+                docId: doc.id,
+                session: d.sessionNumber || 0,
+                time: d.createdAt?.toDate() || null,
+                checkedBy: d.checkedByName || 'Lễ tân'
+            });
+        });
+
+        // Bổ sung info + filter
+        const branchStudents = localState.students.filter(s => s.branchId === currentBranchId);
+        const teacherMap = {};
+        localState.teachers.forEach(t => { teacherMap[t.id] = t.name; });
+
+        // Thêm HV chưa điểm danh lần nào
+        branchStudents.forEach(s => {
+            if (!studentMap[s.id]) {
+                studentMap[s.id] = {
+                    name: s.name,
+                    teacherName: teacherMap[s.assignedTeacherId] || '?',
+                    logs: []
+                };
+            }
+            // Cập nhật tên mới nhất
+            studentMap[s.id].totalSessions = s.totalSessions || 10;
+            studentMap[s.id].currentSessions = s.sessions || 0;
+            studentMap[s.id].curriculum = s.curriculum || 'Bơi Ếch';
+            studentMap[s.id].contractNumber = s.contractNumber || '';
+            studentMap[s.id].saleName = s.saleConfirmedBy || s.creatorName || '';
+            studentMap[s.id].creatorId = s.creatorId || '';
+            studentMap[s.id].phone = s.phone || '';
+        });
+
+        // Build sale map from users for creatorId lookup
+        const saleMapLocal = {};
+        try {
+            const uSnap = await db.collection('users').get();
+            uSnap.forEach(doc => { saleMapLocal[doc.id] = doc.data().name || ''; });
+        } catch (e) { /* ignore */ }
+        // Fill missing saleName from creatorId
+        Object.values(studentMap).forEach(v => {
+            if (!v.saleName && v.creatorId) v.saleName = saleMapLocal[v.creatorId] || '';
+        });
+
+        let entries = Object.entries(studentMap);
+        // Sort logs per student (newest first)
+        entries.forEach(([, v]) => {
+            v.logs.sort((a, b) => (b.time || 0) - (a.time || 0));
+        });
+        if (searchQ) {
+            entries = entries.filter(([, v]) => 
+                v.name.toLowerCase().includes(searchQ) || 
+                (v.contractNumber && v.contractNumber.toLowerCase().includes(searchQ)) ||
+                (v.phone && v.phone.includes(searchQ))
+            );
+        }
+
+        if (entries.length === 0) {
+            container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-muted);">Chưa có dữ liệu điểm danh</div>`;
+            return;
+        }
+
+        // Tính thời gian còn lại cho HV đang học (60 phút)
+        const now = new Date();
+        const sixtyMinAgo = new Date(now.getTime() - 60 * 60 * 1000);
+        entries.forEach(([sid, v]) => {
+            const latestLog = v.logs[0]?.time;
+            if (latestLog && latestLog >= sixtyMinAgo) {
+                v.isActive = true;
+                v.remainMin = Math.max(0, Math.ceil((latestLog.getTime() + 60 * 60 * 1000 - now.getTime()) / 60000));
+            } else {
+                v.isActive = false;
+                v.remainMin = 0;
+            }
+        });
+
+        // Sắp xếp: đang học (mới nhất trước) → bình thường (theo thứ tự đăng ký)
+        const branchIds = branchStudents.map(s => s.id);
+        entries.sort((a, b) => {
+            if (a[1].isActive && !b[1].isActive) return -1;
+            if (!a[1].isActive && b[1].isActive) return 1;
+            if (a[1].isActive && b[1].isActive) {
+                return (b[1].logs[0]?.time || 0) - (a[1].logs[0]?.time || 0);
+            }
+            // Cả 2 không active → theo thứ tự đăng ký
+            return branchIds.indexOf(a[0]) - branchIds.indexOf(b[0]);
+        });
+
+        container.innerHTML = entries.map(([sid, info]) => {
+            const total = info.totalSessions || 10;
+            const cur = info.currentSessions || 0;
+            const pct = Math.min((cur / total) * 100, 100);
+            const isDone = cur >= total;
+            const isActive = info.isActive;
+
+            // Nút huỷ buổi: chỉ hiện nếu log mới nhất trong 20 phút
+            const twentyMinAgo = new Date(now.getTime() - 20 * 60 * 1000);
+            const latestLog = info.logs[0];
+            const canCancel = latestLog && latestLog.time && latestLog.time >= twentyMinAgo;
+            const cancelDocId = canCancel ? (latestLog.docId || '') : '';
+            const cancelRemain = canCancel ? Math.max(0, Math.ceil((latestLog.time.getTime() + 20 * 60 * 1000 - now.getTime()) / 60000)) : 0;
+            const eName = info.name.replace(/'/g, "\\\\'");
+
+            const logsHtml = info.logs.length === 0
+                ? '<div style="padding:8px; color:var(--text-muted); font-size:12px;">Chưa điểm danh lần nào</div>'
+                : info.logs.map(l => {
+                    const timeStr = l.time ? l.time.toLocaleDateString('vi-VN') + ' ' + l.time.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '?';
+                    return `<div style="display:flex; justify-content:space-between; font-size:12px; padding:4px 8px; border-bottom:1px solid var(--border-color);">
+                        <span>Buổi <strong>${l.session}</strong></span>
+                        <span style="color:var(--text-muted);">${timeStr}</span>
+                    </div>`;
+                }).join('');
+
+            const activeBorder = isActive ? 'rgba(6,182,212,0.5)' : (isDone ? 'rgba(239,68,68,0.2)' : 'var(--border-color)');
+            const activeBg = isActive ? 'rgba(6,182,212,0.04)' : (isDone ? 'rgba(239,68,68,0.03)' : 'var(--card-bg)');
+
+            return `
+            <div style="margin-bottom: 8px; border: 1px solid ${activeBorder}; border-radius: 10px; overflow: hidden; ${isActive ? 'box-shadow: 0 0 8px rgba(6,182,212,0.15);' : ''}">
+                <div onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'"
+                    style="padding: 12px 14px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; background: ${activeBg};">
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-weight:600; font-size:14px;">
+                            ${isActive ? '<span style="color:#06b6d4;">🏊</span> ' : ''}${info.name} 
+                            ${isDone ? '<span style="color:#ef4444; font-size:11px;">✅ Xong</span>' : ''}
+                            ${isActive ? `<span style="font-size:10px; padding:2px 6px; border-radius:8px; background:rgba(6,182,212,0.15); color:#06b6d4; font-weight:700;">⏳ ${info.remainMin}p</span>` : ''}
+                        </div>
+                        <div style="font-size:11px; color:var(--text-muted);">GV: ${info.teacherName} · ${info.curriculum || 'Bơi Ếch'}${info.contractNumber ? ` · HĐ: <strong>${info.contractNumber}</strong>` : ''}</div>
+                        ${info.saleName ? `<div style="font-size:11px; color:var(--text-muted);"><i class="fa-solid fa-user-tie" style="color:#f59e0b;"></i> Sale: <strong>${info.saleName}</strong></div>` : ''}
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        ${canCancel ? `<button onclick="event.stopPropagation(); cancelAttendance('${sid}', '${eName}', '${cancelDocId}', ${cur})"
+                            style="padding:5px 10px; border-radius:6px; border:none; cursor:pointer; font-weight:600; font-size:11px;
+                            background:rgba(239,68,68,0.12); color:#ef4444; border:1px solid rgba(239,68,68,0.25); white-space:nowrap;">
+                            <i class="fa-solid fa-xmark"></i> Huỷ (${cancelRemain}p)
+                        </button>` : ''}
+                        <div style="text-align:right;">
+                            <div style="font-weight:700; font-size:14px; color:${isDone ? '#ef4444' : 'var(--primary)'};">${cur}/${total}</div>
+                            <div style="width:60px; height:4px; background:rgba(0,0,0,0.1); border-radius:2px; overflow:hidden; margin-top:2px;">
+                                <div style="width:${pct}%; height:100%; background:${isDone ? '#ef4444' : '#3b82f6'};"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <i class="fa-solid fa-chevron-down" style="font-size:10px; color:var(--text-muted);"></i>
+                </div>
+                <div style="display:none; background:rgba(0,0,0,0.02); border-top:1px solid var(--border-color);">
+                    <div style="padding:6px 10px; font-size:11px; font-weight:600; color:var(--text-muted); background:rgba(0,0,0,0.03);">📅 Lịch sử điểm danh (${info.logs.length} lần)</div>
+                    ${logsHtml}
+                </div>
+            </div>`;
+        }).join('');
+
+    } catch (e) {
+        console.error('renderLetanManageTable error:', e);
+        container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--danger);">Lỗi tải dữ liệu: ${e.message}</div>`;
+    }
+};
+
+// ===================== LỊCH SỬ ĐIỂM DANH HV THEO NGÀY (LỄ TÂN) =====================
+window.renderLetanHvHistory = async function (dateStr) {
+    const container = document.getElementById('letan-hv-history-result');
+    const countEl = document.getElementById('letan-hv-history-count');
+    if (!container) return;
+    if (!dateStr) {
+        container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;"><i class="fa-solid fa-calendar-days" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>Chọn ngày để xem lịch sử điểm danh HV</div>';
+        if (countEl) countEl.textContent = '';
+        return;
+    }
+
+    container.innerHTML = '<div style="text-align:center; padding:15px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Đang tải...</div>';
+
+    try {
+        const brId = currentBranchId;
+        const selectedDate = new Date(dateStr);
+        selectedDate.setHours(0, 0, 0, 0);
+        const nextDay = new Date(selectedDate);
+        nextDay.setDate(nextDay.getDate() + 1);
+
+        const snap = await db.collection('attendance')
+            .where('branchId', '==', brId)
+            .get();
+
+        const dayDocs = snap.docs.filter(doc => {
+            const ts = doc.data().createdAt?.toDate?.();
+            return ts && ts >= selectedDate && ts < nextDay;
+        }).sort((a, b) => {
+            const tA = a.data().createdAt?.toDate?.()?.getTime() || 0;
+            const tB = b.data().createdAt?.toDate?.()?.getTime() || 0;
+            return tB - tA;
+        });
+
+        const dateLabel = selectedDate.toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+
+        if (dayDocs.length === 0) {
+            container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">
+                <i class="fa-solid fa-calendar-xmark" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>
+                Không có HV điểm danh ngày <b>${dateLabel}</b>
+            </div>`;
+            if (countEl) countEl.textContent = '';
+            return;
+        }
+
+        if (countEl) countEl.textContent = `${dayDocs.length} lượt`;
+
+        // Group by teacher
+        const byTeacher = {};
+        dayDocs.forEach(doc => {
+            const d = doc.data();
+            const tName = d.teacherName || 'Chưa gán';
+            if (!byTeacher[tName]) byTeacher[tName] = [];
+            byTeacher[tName].push(d);
+        });
+
+        const teacherColor = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
+
+        let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <span style="font-size:13px; font-weight:600; color:var(--text-color);">📅 ${dateLabel}</span>
+            <span style="font-size:12px; background:rgba(59,130,246,0.12); color:#3b82f6; padding:3px 10px; border-radius:8px; font-weight:700;">${dayDocs.length} HV</span>
+        </div>`;
+
+        let colorIdx = 0;
+        Object.keys(byTeacher).sort().forEach(tName => {
+            const students = byTeacher[tName];
+            const lc = teacherColor[colorIdx % teacherColor.length];
+            colorIdx++;
+            html += `<div style="margin-bottom:8px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                    <span style="background:${lc}; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700;">GV ${tName}</span>
+                    <span style="font-size:11px; color:var(--text-muted);">${students.length} HV</span>
+                </div>`;
+            students.forEach(d => {
+                const ts = d.createdAt?.toDate ? d.createdAt.toDate() : null;
+                const time = ts ? ts.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
+                html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; border-bottom:1px dashed var(--border-color); font-size:12px;">
+                    <span style="font-weight:500;">${d.studentName || 'HV'}</span>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <span style="color:var(--text-muted);">Buổi <strong>${d.sessionNumber || '?'}</strong></span>
+                        <span style="color:var(--text-muted);"><i class="fa-solid fa-clock"></i> ${time}</span>
+                        <span style="font-size:10px; color:${lc};">${d.checkedByName || 'LT'}</span>
+                    </div>
+                </div>`;
+            });
+            html += `</div>`;
+        });
+
+        container.innerHTML = html;
+    } catch (e) {
+        console.error('renderLetanHvHistory error:', e);
+        container.innerHTML = '<div style="text-align:center; padding:15px; color:#ef4444;">Lỗi tải dữ liệu.</div>';
+    }
+};
+
+// ===================== LỊCH SỬ ĐIỂM DANH CLB THEO NGÀY (LỄ TÂN) =====================
+window.renderLetanClbHistory = async function (dateStr) {
+    const container = document.getElementById('letan-clb-history-result');
+    const countEl = document.getElementById('letan-clb-history-count');
+    if (!container) return;
+    if (!dateStr) {
+        container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;"><i class="fa-solid fa-calendar-days" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>Chọn ngày để xem lịch sử điểm danh CLB</div>';
+        if (countEl) countEl.textContent = '';
+        return;
+    }
+
+    container.innerHTML = '<div style="text-align:center; padding:15px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Đang tải...</div>';
+
+    try {
+        const brId = currentBranchId;
+        const selectedDate = new Date(dateStr);
+        selectedDate.setHours(0, 0, 0, 0);
+        const nextDay = new Date(selectedDate);
+        nextDay.setDate(nextDay.getDate() + 1);
+
+        const snap = await db.collection('clb_attendance')
+            .where('branchId', '==', brId)
+            .get();
+
+        const dayDocs = snap.docs.filter(doc => {
+            const ts = doc.data().timestamp?.toDate?.();
+            return ts && ts >= selectedDate && ts < nextDay;
+        }).sort((a, b) => {
+            const tA = a.data().timestamp?.toDate?.()?.getTime() || 0;
+            const tB = b.data().timestamp?.toDate?.()?.getTime() || 0;
+            return tB - tA;
+        });
+
+        const dateLabel = selectedDate.toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+
+        if (dayDocs.length === 0) {
+            container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">
+                <i class="fa-solid fa-calendar-xmark" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>
+                Không có VĐV điểm danh ngày <b>${dateLabel}</b>
+            </div>`;
+            if (countEl) countEl.textContent = '';
+            return;
+        }
+
+        if (countEl) countEl.textContent = `${dayDocs.length} lượt`;
+
+        // Group by class
+        const byClass = {};
+        dayDocs.forEach(doc => {
+            const d = doc.data();
+            const cl = d.classLevel || '?';
+            if (!byClass[cl]) byClass[cl] = [];
+            byClass[cl].push(d);
+        });
+
+        const levelColor = { 'Mầm': '#ec4899', 'D1': '#3b82f6', 'D2': '#8b5cf6', 'C': '#f59e0b', 'B': '#ef4444', 'A': '#10b981' };
+
+        let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <span style="font-size:13px; font-weight:600; color:var(--text-color);">📅 ${dateLabel}</span>
+            <span style="font-size:12px; background:rgba(245,158,11,0.12); color:#f59e0b; padding:3px 10px; border-radius:8px; font-weight:700;">${dayDocs.length} VĐV</span>
+        </div>`;
+
+        Object.keys(byClass).sort().forEach(cl => {
+            const students = byClass[cl];
+            const lc = levelColor[cl] || '#6b7280';
+            html += `<div style="margin-bottom:8px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                    <span style="background:${lc}; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700;">Lớp ${cl}</span>
+                    <span style="font-size:11px; color:var(--text-muted);">${students.length} VĐV</span>
+                </div>`;
+            students.forEach(d => {
+                const ts = d.timestamp?.toDate ? d.timestamp.toDate() : null;
+                const time = ts ? ts.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
+                const confirmed = d.coachConfirmed ? `<span style="font-size:10px; color:#10b981;"><i class="fa-solid fa-circle-check"></i> ${d.coachConfirmedName || 'HLV'}</span>` : '<span style="font-size:10px; color:var(--text-muted);">Chưa XN</span>';
+                html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; border-bottom:1px dashed var(--border-color); font-size:12px;">
+                    <span style="font-weight:500;">${d.athleteName || 'VĐV'}</span>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <span style="color:var(--text-muted);"><i class="fa-solid fa-clock"></i> ${time}</span>
+                        ${confirmed}
+                    </div>
+                </div>`;
+            });
+            html += `</div>`;
+        });
+
+        container.innerHTML = html;
+    } catch (e) {
+        console.error('renderLetanClbHistory error:', e);
+        container.innerHTML = '<div style="text-align:center; padding:15px; color:#ef4444;">Lỗi tải dữ liệu.</div>';
+    }
+};
 
 // Thống kê cá nhân Sale
 let saleFilterMode = 'all';
@@ -2255,7 +3727,6 @@ window.renewClbContract = async function (athleteId, athleteName) {
         // Tự tính HSD = ngày kích hoạt + số tháng
         const newExpiresAt = new Date(newActivatedAt);
         newExpiresAt.setMonth(newExpiresAt.getMonth() + newMonths);
-        newExpiresAt.setDate(newExpiresAt.getDate() - 1); // HSD = kích hoạt + N tháng - 1 ngày
         newExpiresAt.setHours(23, 59, 59, 999);
 
         try {
@@ -2272,8 +3743,7 @@ window.renewClbContract = async function (athleteId, athleteName) {
                 status: 'active',
                 renewedAt: firebase.firestore.FieldValue.serverTimestamp(),
                 previousContractNumber: oldContract,
-                renewCount: firebase.firestore.FieldValue.increment(1),
-                bonusDays: 0
+                renewCount: firebase.firestore.FieldValue.increment(1)
             };
             const results = await Promise.allSettled([
                 db.collection('athletes').doc(athleteId).update(renewData),
@@ -2283,15 +3753,15 @@ window.renewClbContract = async function (athleteId, athleteName) {
 
             // Sync lên Google Sheet
             const branchObj = FIXED_BRANCHES.find(b => b.id === brId);
-            syncClbRowToSheet({
-                action: 'renewClbRow',
-                branchName: 'CLB_' + (branchObj?.name || 'N/A'),
+            syncToGoogleSheet({
+                action: 'renewClb',
+                branchName: branchObj?.name || 'N/A',
                 name: athleteName,
                 oldContract: oldContract,
                 newContract: newContract,
                 activatedAt: newActivatedAt.toLocaleDateString('vi-VN'),
                 expiresAt: newExpiresAt.toLocaleDateString('vi-VN'),
-                pkg: `${newSessions}b/tuần × ${newMonths} tháng`
+                package: `${newSessions}b/tuần × ${newMonths} tháng`
             });
 
             overlay.remove();
@@ -2827,14 +4297,13 @@ async function pushTeacherToQueue(teacherId, type, targetBranchId = currentBranc
 
 // Tìm vị trí GV tiếp theo có thể nhận HĐ (bỏ qua paused, debt)
 // Nếu GV có debt > 0: giảm debt 1, skip qua
-function getNextActiveIndex(fixedOrder, currentIdx, debtMap, teachers, slotNumbers) {
+function getNextActiveIndex(fixedOrder, currentIdx, debtMap, teachers) {
     const len = fixedOrder.length;
-    if (len === 0) return { nextIndex: 0, updatedDebt: {}, skippedSlots: [] };
+    if (len === 0) return { nextIndex: 0, updatedDebt: {} };
     const updatedDebt = { ...debtMap };
-    const skippedSlots = [];
-    const sns = slotNumbers || [];
 
     // Bước 1: Tìm slot THỰC SỰ nhận HV (bỏ qua debt + paused từ currentIdx)
+    // Chỉ ở bước này nợ mới được tiêu — vì slot này ĐÚNG PHIÊN nhưng bị nợ nên mất lượt
     let actualReceiver = currentIdx;
     for (let i = 0; i < len; i++) {
         const tid = fixedOrder[actualReceiver];
@@ -2845,42 +4314,37 @@ function getNextActiveIndex(fixedOrder, currentIdx, debtMap, teachers, slotNumbe
         }
         const sk = 's' + actualReceiver;
         if ((updatedDebt[sk] || 0) > 0) {
-            const debtBefore = updatedDebt[sk];
+            // Slot này có nợ → tiêu nợ, nhảy xuống cuối (skip)
             updatedDebt[sk]--;
             if (updatedDebt[sk] <= 0) delete updatedDebt[sk];
-            skippedSlots.push({
-                slotIndex: actualReceiver,
-                teacherId: tid,
-                teacherName: teacher.name || '?',
-                slotNumber: sns[actualReceiver] || (actualReceiver + 1),
-                reason: 'debt',
-                debtBefore: debtBefore,
-                debtAfter: updatedDebt[sk] || 0
-            });
             actualReceiver = (actualReceiver + 1) % len;
             continue;
         }
-        break;
+        break; // Đây là slot thực sự nhận HV
     }
 
-    // Bước 2: Tìm slot TIẾP THEO sau slot nhận (KHÔNG tiêu nợ)
+    // Bước 2: Tìm slot TIẾP THEO sau slot nhận để đặt con trỏ
+    // KHÔNG tiêu nợ ở đây — nợ chỉ bị tiêu khi slot đó ĐẾN LƯỢT nhận HĐ (Bước 1 lần sau)
     let checked = 0;
     let idx = (actualReceiver + 1) % len;
     while (checked < len) {
         const tid = fixedOrder[idx];
         const teacher = teachers.find(t => t.id === tid);
         if (!teacher || teacher.queuePaused) {
+            // GV paused hoặc không tồn tại → bỏ qua hoàn toàn
             idx = (idx + 1) % len;
             checked++;
             continue;
         }
-        return { nextIndex: idx, updatedDebt, skippedSlots, receiverIndex: actualReceiver };
+        // Slot active (kể cả có nợ) → đây là slot tiếp theo
+        // Nợ sẽ được xử lý khi slot này đến lượt nhận HĐ (Bước 1)
+        return { nextIndex: idx, updatedDebt };
     }
-    return { nextIndex: (actualReceiver + 1) % len, updatedDebt, skippedSlots, receiverIndex: actualReceiver };
+    return { nextIndex: (actualReceiver + 1) % len, updatedDebt };
 }
 
 // ===================== QUEUE ACTION LOG ===================== //
-// Ghi log thay đổi turn — giữ 5 vòng turn gần nhất
+// Ghi log thay đổi turn — chỉ giữ 2 vòng turn gần nhất
 async function logQueueAction(params) {
     const brId = params.branchId || currentBranchId;
     try {
@@ -2897,14 +4361,11 @@ async function logQueueAction(params) {
             performedBy: currentUserId,
             performedByName: currentUserDisplayName || window._currentUserData?.name || 'Hệ thống',
             debtSnapshot: params.debtSnapshot || null,
-            skippedSlots: params.skippedSlots || [],
-            slotNumber: params.slotNumber || 0,
-            roundNumber: params.roundNumber || 0,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // Auto-cleanup: giữ tối đa 5 vòng turn
-        const maxKeep = Math.max((localState.fixedOrder?.length || 10) * 5 + 10, 60);
+        // Auto-cleanup: giữ tối đa 2 vòng turn (2 × số slot + 10 buffer)
+        const maxKeep = Math.max((localState.fixedOrder?.length || 10) * 2 + 10, 30);
         const allLogs = await db.collection('queue_logs')
             .where('branchId', '==', brId)
             .orderBy('createdAt', 'desc')
@@ -3273,42 +4734,54 @@ document.addEventListener('click', function (e) {
 });
 
 // Xử lý Hợp đồng do Sale Gán (Có Nút 1 và Nút 2 Ngoại Lệ)
-window.saleAssignStudent = async function (name, phone, gender, ageCategory, contractNumber, teacherId, curriculum, ptSessions, isException = false, age = 0, isTestStudent = false, isDiving = false, skipQueue = false) {
+window.saleAssignStudent = async function (name, phone, gender, ageCategory, contractNumber, teacherId, curriculum, ptSessions, isException = false, age = 0, isTestStudent = false, isDiving = false) {
     if (!currentBranchId) return alert("Vui lòng chọn cơ sở gốc!");
     const tList = localState.teachers;
     const tObj = tList.find(x => x.id === teacherId);
     if (!tObj) return alert("Giáo viên không tồn tại trong DS!");
 
     try {
-        // Kiểm tra trùng số hợp đồng (cả HV + VĐV CLB cùng cơ sở)
+        // Kiểm tra trùng số hợp đồng (client-side filter to avoid composite index)
         if (contractNumber) {
-            const dupMsg = await checkDuplicateContract(contractNumber, currentBranchId);
-            if (dupMsg) return alert(dupMsg);
-        }
-
-        // Kiểm tra trùng SĐT - thông báo gói đã đăng ký
-        let isUpgrade = false;
-        let upgradeFromId = '';
-        if (phone && phone.length >= 8) {
-            const existingStudents = await db.collection('students')
+            const allBranchStudents = await db.collection('students')
                 .where('branchId', '==', currentBranchId)
                 .get();
+            const existingContract = allBranchStudents.docs.find(doc => doc.data().contractNumber === contractNumber);
+            if (existingContract) {
+                return alert(`Số hợp đồng "${contractNumber}" đã tồn tại trong hệ thống! Vui lòng kiểm tra lại.`);
+            }
+        }
 
-            const phoneMatches = existingStudents.docs.filter(doc => {
+        // Kiểm tra trùng họ tên / tuổi / SĐT - phát hiện gói nâng cấp
+        let isUpgrade = false;
+        let upgradeFromId = '';
+        const trimmedName = name.trim().toLowerCase();
+        const existingStudents = await db.collection('students')
+            .where('branchId', '==', currentBranchId)
+            .get();
+
+        const duplicates = existingStudents.docs.filter(doc => {
+            const d = doc.data();
+            const existingName = (d.name || '').trim().toLowerCase();
+            if (existingName === trimmedName) return true; // Trùng họ tên
+            if (existingName === trimmedName && d.age && age && d.age === age) return true; // Trùng tên + tuổi
+            if (phone && d.phone && d.phone === phone && phone.length >= 8) return true; // Trùng SĐT
+            return false;
+        });
+
+        if (duplicates.length > 0) {
+            const dupInfo = duplicates.map(doc => {
                 const d = doc.data();
-                return d.phone && d.phone === phone;
-            });
+                return `  • "${d.name}" - ${d.curriculum || 'Bơi Ếch'} (HĐ: ${d.contractNumber || 'N/A'}, Buổi: ${d.sessions}/${d.totalSessions})`;
+            }).join('\n');
 
-            if (phoneMatches.length > 0) {
-                const matchInfo = phoneMatches.map((doc, i) => {
-                    const d = doc.data();
-                    return `  ${i + 1}. "${d.name}" — ${d.curriculum || 'Bơi Ếch'} (HĐ: ${d.contractNumber || 'N/A'}, Buổi: ${d.sessions}/${d.totalSessions || 10})`;
-                }).join('\n');
+            const upgradeConfirm = confirm(
+                `⚡ Phát hiện HV có thể trùng!\n\nHọc viên mới: "${name}" (${curriculum})\n\nĐã có trong hệ thống:\n${dupInfo}\n\n👉 Đây có phải GÓI NÂNG CẤP không?\n\n[OK] = Đúng, gói nâng cấp → Lưu thông tin nâng cấp\n[Cancel] = Không phải, bỏ qua → Tiếp tục bình thường`
+            );
 
-                alert(`📋 SĐT "${phone}" đã đăng ký ${phoneMatches.length} gói:\n\n${matchInfo}\n\n→ HĐ mới "${name}" (${curriculum}) sẽ được tạo bình thường.`);
-
+            if (upgradeConfirm) {
                 isUpgrade = true;
-                upgradeFromId = phoneMatches[0].id;
+                upgradeFromId = duplicates[0].id;
             }
         }
 
@@ -3362,20 +4835,6 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
         const qDoc = db.collection('queues').doc(currentBranchId);
 
         // LOGIC HÀNG CHỜ MỚI (V4.14) - Sử dụng Skip List (Ghi Nợ Lượt)
-        // skipQueue = true: đang gán nhiều HV trong 1 lượt, chưa phải HV cuối → không advance queue
-        if (skipQueue) {
-            console.log(`⏭️ [HĐ] skipQueue=true: Gán HV "${name}" cho GV "${tObj?.name}" mà KHÔNG advance queue`);
-            logQueueAction({
-                action: 'contract_batch',
-                teacherId: teacherId,
-                teacherName: tObj?.name || '',
-                studentName: name,
-                contractNumber: contractNumber || '',
-                detail: `Gán HV "${name}" (${curriculum || 'Bơi Ếch'}) cho GV "${tObj?.name}" — cùng lượt, chưa chuyển turn`
-            });
-            sendNotification(teacherId, 'contract', `📝 ${currentUserDisplayName || 'Sale'} vừa gán học viên "${name}" cho bạn (HĐ: ${contractNumber || 'Chưa có'}, ${curriculum || 'Bơi Ếch'}).`);
-            return;
-        }
         if (!isException) {
             // Xác nhận bình thường → Di chuyển currentIndex đến GV tiếp theo
             let _logFromIdx = 0, _logToIdx = 0, _logDebt = {};
@@ -3490,15 +4949,91 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
     }
 }
 
+// Xem chi tiết trạng thái Queue (Admin)
+window.showQueueDebug = async function () {
+    if (!currentBranchId) return alert('Chưa chọn cơ sở!');
+    const brName = FIXED_BRANCHES.find(b => b.id === currentBranchId)?.name || currentBranchId;
+    
+    try {
+        const qDoc = await db.collection('queues').doc(currentBranchId).get();
+        if (!qDoc.exists) return alert('Không có dữ liệu queue!');
+        const data = qDoc.data();
+        const fo = data.fixedOrder || [];
+        const ci = data.currentIndex || 0;
+        const dm = data.debtMap || {};
+        const slotNums = data.fixedSlotNumbers || {};
+        const testMap = data.testingMap || {};
 
+        let msg = `📊 TRẠNG THÁI HÀNG ĐỢI — ${brName}\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        msg += `Con trỏ (currentIndex): ${ci}\n`;
+        msg += `Tổng slot: ${fo.length}\n\n`;
+        msg += `THỨ TỰ GV (từ currentIndex):\n`;
 
-// ========== LỊCH SỬ TURN THEO VÒNG (có STT trong vòng) ========== //
+        for (let i = 0; i < fo.length; i++) {
+            const realIdx = (ci + i) % fo.length;
+            const tid = fo[realIdx];
+            const teacher = localState.teachers.find(t => t.id === tid);
+            const name = teacher ? teacher.name : '(không tìm thấy)';
+            const paused = teacher?.queuePaused ? ' ⏸️PAUSED' : '';
+            const sk = 's' + realIdx;
+            const debt = dm[sk] || 0;
+            const debtStr = debt > 0 ? ` 🔴 Nợ ${debt} vòng` : '';
+            const isTest = testMap[tid] ? ' 🧪 Test' : '';
+            const marker = i === 0 ? ' ← TOP 1' : '';
+            const sn = slotNums[realIdx] || (realIdx + 1);
+            msg += `  ${i + 1}. #${sn} ${name}${paused}${debtStr}${isTest}${marker}\n`;
+        }
+
+        // Lịch sử phạt 7 ngày gần đây
+        const weekAgo = new Date();
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        const penSnap = await db.collection('penalties')
+            .where('branchId', '==', currentBranchId)
+            .get();
+        const recentPenalties = penSnap.docs
+            .map(d => d.data())
+            .filter(p => {
+                const ts = p.createdAt?.toDate?.();
+                return ts && ts >= weekAgo;
+            })
+            .sort((a, b) => (b.createdAt?.toDate?.()?.getTime() || 0) - (a.createdAt?.toDate?.()?.getTime() || 0));
+
+        if (recentPenalties.length > 0) {
+            msg += `\n━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            msg += `📋 PHẠT MẤT LƯỢT (7 ngày gần):\n`;
+            recentPenalties.forEach(p => {
+                const time = p.createdAt?.toDate?.()?.toLocaleString('vi-VN') || '—';
+                msg += `  • ${p.teacherName || '?'} — bởi ${p.saleName || '?'} — "${p.reason || '?'}" (${time})\n`;
+            });
+        }
+
+        // debtMap chi tiết
+        const debtKeys = Object.keys(dm).filter(k => dm[k] > 0);
+        if (debtKeys.length > 0) {
+            msg += `\n━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            msg += `🔴 CHI TIẾT NỢ (debtMap):\n`;
+            debtKeys.forEach(k => {
+                const slotIdx = parseInt(k.replace('s', ''));
+                const tid = fo[slotIdx];
+                const teacher = localState.teachers.find(t => t.id === tid);
+                msg += `  • Slot ${slotIdx} (${teacher?.name || '?'}): nợ ${dm[k]} vòng\n`;
+            });
+        }
+
+        alert(msg);
+    } catch (e) {
+        alert('Lỗi: ' + e.message);
+    }
+};
+
+// Xem lịch sử chuyển turn (Admin/Manager)
 window.showQueueHistory = async function () {
     if (!currentBranchId) return alert('Chưa chọn cơ sở!');
     const brName = FIXED_BRANCHES.find(b => b.id === currentBranchId)?.name || currentBranchId;
 
     try {
-        const maxShow = Math.max((localState.fixedOrder?.length || 10) * 5 + 10, 60);
+        const maxShow = Math.max((localState.fixedOrder?.length || 10) * 2 + 10, 30);
         const snap = await db.collection('queue_logs')
             .where('branchId', '==', currentBranchId)
             .orderBy('createdAt', 'desc')
@@ -3510,148 +5045,87 @@ window.showQueueHistory = async function () {
             return;
         }
 
-        // Group by roundNumber
-        const rounds = {};
-        const oldLogs = [];
-        snap.docs.forEach(doc => {
+        // Render modal overlay
+        const actionLabel = {
+            'contract': '📝 Gán HĐ',
+            'contract_exception': '✨ HĐ Ngoại lệ',
+            'penalty': '⚠️ Phạt lượt',
+            'cut_turn': '✂️ Cắt lượt',
+            'rewind': '⬆️ Đẩy lên Top',
+            'push_teacher': '➕ Thêm GV',
+            'change_type': '🔄 Đổi loại GV'
+        };
+        const actionColor = {
+            'contract': '#3b82f6',
+            'contract_exception': '#f59e0b',
+            'penalty': '#ef4444',
+            'cut_turn': '#8b5cf6',
+            'rewind': '#10b981',
+            'push_teacher': '#06b6d4',
+            'change_type': '#ec4899'
+        };
+
+        let rows = '';
+        snap.docs.forEach((doc, i) => {
             const d = doc.data();
-            d._id = doc.id;
-            if (d.roundNumber && d.roundNumber > 0) {
-                if (!rounds[d.roundNumber]) rounds[d.roundNumber] = [];
-                rounds[d.roundNumber].push(d);
-            } else {
-                oldLogs.push(d);
-            }
+            const time = d.createdAt?.toDate?.()?.toLocaleString('vi-VN') || '—';
+            const label = actionLabel[d.action] || d.action;
+            const color = actionColor[d.action] || '#888';
+            const fromTo = (d.fromIndex !== null && d.toIndex !== null) ? `Index: ${d.fromIndex} → ${d.toIndex}` : '';
+            rows += `
+                <tr style="border-bottom:1px solid var(--border-color);">
+                    <td style="padding:10px 12px; font-size:12px; color:var(--text-muted); white-space:nowrap;">${time}</td>
+                    <td style="padding:10px 12px;">
+                        <span style="display:inline-block; padding:3px 10px; border-radius:6px; font-size:11px; font-weight:600; background:${color}18; color:${color}; border:1px solid ${color}40;">${label}</span>
+                    </td>
+                    <td style="padding:10px 12px; font-size:13px; color:var(--text-color);">${d.detail || '—'}</td>
+                    <td style="padding:10px 12px; font-size:12px; color:var(--text-muted);">${fromTo}</td>
+                    <td style="padding:10px 12px; font-size:12px; color:var(--text-muted);">${d.performedByName || '—'}</td>
+                </tr>`;
         });
 
-        const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => b - a);
-        const qDoc = await db.collection('queues').doc(currentBranchId).get();
-        const currentRound = qDoc.exists ? (qDoc.data().roundNumber || 1) : 1;
-
-        let content = '';
-
-        roundKeys.forEach(rn => {
-            const entries = rounds[rn];
-            entries.sort((a, b) => {
-                const tA = a.createdAt?.toDate?.()?.getTime() || 0;
-                const tB = b.createdAt?.toDate?.()?.getTime() || 0;
-                return tA - tB;
-            });
-
-            const isCurrent = rn === currentRound;
-            const roundLabel = isCurrent ? `🔄 Vòng Turn ${String(rn).padStart(2, '0')} (đang diễn ra)` : `✅ Vòng Turn ${String(rn).padStart(2, '0')}`;
-            const headerBg = isCurrent ? 'linear-gradient(135deg, rgba(37,99,235,0.15), rgba(6,182,212,0.1))' : 'rgba(255,255,255,0.03)';
-            const headerBorder = isCurrent ? 'var(--primary)' : 'var(--border-color)';
-
-            content += '<div style="margin-bottom:16px; border:1px solid ' + headerBorder + '; border-radius:12px; overflow:hidden;">';
-            content += '<div style="padding:12px 16px; background:' + headerBg + '; border-bottom:1px solid var(--border-color);"><span style="font-weight:700; font-size:14px; color:var(--text-color);">' + roundLabel + '</span></div>';
-            content += '<div style="padding:8px 0;">';
-
-            let orderInRound = 0;
-
-            entries.forEach(d => {
-                const time = d.createdAt?.toDate?.()?.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) || '';
-                const date = d.createdAt?.toDate?.()?.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }) || '';
-
-                const skipped = d.skippedSlots || [];
-                skipped.forEach(sk => {
-                    orderInRound++;
-                    let skipReason = '', skipIcon = '⏭️';
-                    if (sk.reason === 'debt') {
-                        skipReason = 'qua lượt vì bị trừ nợ 1 lượt (nợ còn ' + (sk.debtAfter || 0) + ')';
-                        skipIcon = '💳';
-                    } else if (sk.reason === 'paused') {
-                        skipReason = 'qua lượt vì đang tạm dừng';
-                        skipIcon = '⏸️';
-                    } else {
-                        skipReason = 'qua lượt';
-                    }
-                    content += '<div style="padding:7px 16px; display:flex; align-items:center; gap:8px; border-bottom:1px solid rgba(255,255,255,0.03); flex-wrap:wrap;">'
-                        + '<span style="font-size:11px; color:var(--text-muted); min-width:70px;">' + date + ' ' + time + '</span>'
-                        + '<span style="background:rgba(107,114,128,0.15); color:#9ca3af; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; min-width:32px; text-align:center;">TT ' + orderInRound + '</span>'
-                        + '<span style="background:rgba(239,68,68,0.1); color:#ef4444; font-size:11px; font-weight:600; padding:2px 8px; border-radius:4px;">#' + (sk.slotNumber || '?') + '</span>'
-                        + '<span style="font-size:12px; color:#ef4444; font-weight:600;">' + skipIcon + ' ' + (sk.teacherName || '?') + '</span>'
-                        + '<span style="font-size:12px; color:var(--text-muted);">→ ' + skipReason + '</span>'
-                        + '</div>';
-                });
-
-                orderInRound++;
-                const sn = d.slotNumber || '?';
-                let color = '#3b82f6', actionIcon = '📝', actionText = '';
-                if (d.action === 'contract') {
-                    color = '#3b82f6'; actionIcon = '📝';
-                    actionText = 'qua lượt vì nhận HĐ mới "' + (d.contractNumber || '') + '" — HV "' + (d.studentName || '?') + '"';
-                } else if (d.action === 'contract_batch') {
-                    color = '#06b6d4'; actionIcon = '📦';
-                    actionText = 'nhận HĐ cùng lượt "' + (d.contractNumber || '') + '" — HV "' + (d.studentName || '?') + '" (chưa chuyển turn)';
-                    orderInRound--;
-                } else if (d.action === 'contract_exception') {
-                    color = '#f59e0b'; actionIcon = '✨';
-                    actionText = 'nhận HĐ ngoại lệ "' + (d.contractNumber || '') + '" — HV "' + (d.studentName || '?') + '" → ghi nợ 1 lượt';
-                } else if (d.action === 'cut_turn') {
-                    color = '#8b5cf6'; actionIcon = '✂️';
-                    actionText = 'bị cắt lượt bởi ' + (d.performedByName || 'Admin');
-                } else if (d.action === 'penalty') {
-                    color = '#ef4444'; actionIcon = '⚠️';
-                    actionText = 'bị phạt mất lượt';
-                } else if (d.action === 'rewind') {
-                    color = '#10b981'; actionIcon = '⏪';
-                    actionText = 'được đẩy lên Top 1';
-                } else {
-                    actionText = d.detail || d.action;
-                }
-
-                const orderLabel = d.action === 'contract_batch' ? '—' : ('TT ' + orderInRound);
-                const orderBg = d.action === 'contract_batch' ? 'rgba(6,182,212,0.1)' : 'rgba(107,114,128,0.15)';
-
-                content += '<div style="padding:8px 16px; display:flex; align-items:center; gap:8px; border-bottom:1px solid rgba(255,255,255,0.03); flex-wrap:wrap;">'
-                    + '<span style="font-size:11px; color:var(--text-muted); min-width:70px;">' + date + ' ' + time + '</span>'
-                    + '<span style="background:' + orderBg + '; color:#9ca3af; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; min-width:32px; text-align:center;">' + orderLabel + '</span>'
-                    + '<span style="background:' + color + '18; color:' + color + '; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; min-width:24px; text-align:center;">#' + sn + '</span>'
-                    + '<span style="font-size:13px; font-weight:600; color:' + color + ';">' + actionIcon + ' ' + (d.teacherName || '?') + '</span>'
-                    + '<span style="font-size:12px; color:var(--text-color);">→ ' + actionText + '</span>'
-                    + '</div>';
-            });
-
-            content += '</div></div>';
-        });
-
-        // Log cũ (không có roundNumber)
-        if (oldLogs.length > 0) {
-            content += '<div style="margin-bottom:16px; border:1px solid var(--border-color); border-radius:12px; overflow:hidden; opacity:0.6;">';
-            content += '<div style="padding:12px 16px; background:rgba(255,255,255,0.03); border-bottom:1px solid var(--border-color);"><span style="font-weight:700; font-size:14px; color:var(--text-muted);">📁 Lịch sử cũ (trước khi cập nhật)</span></div>';
-            content += '<div style="padding:8px 0;">';
-            oldLogs.forEach(d => {
-                const time = d.createdAt?.toDate?.()?.toLocaleString('vi-VN') || '—';
-                content += '<div style="padding:6px 16px; font-size:12px; color:var(--text-muted); border-bottom:1px solid rgba(255,255,255,0.03);">' + time + ' — ' + (d.detail || d.action || '—') + '</div>';
-            });
-            content += '</div></div>';
-        }
-
+        // Tạo modal
         let modal = document.getElementById('queue-history-modal');
         if (!modal) {
             modal = document.createElement('div');
             modal.id = 'queue-history-modal';
             document.body.appendChild(modal);
         }
-        modal.innerHTML = '<div style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:99999; display:flex; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target===this) this.remove();">'
-            + '<div style="background:var(--card-bg); border-radius:16px; max-width:800px; width:100%; max-height:85vh; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.4); display:flex; flex-direction:column;">'
-            + '<div style="padding:16px 20px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">'
-            + '<div><h3 style="margin:0; font-size:16px; color:var(--text-color);">📋 Lịch sử Turn — ' + brName + '</h3>'
-            + '<p style="margin:4px 0 0; font-size:12px; color:var(--text-muted);">Vòng hiện tại: ' + currentRound + ' | ' + snap.size + ' bản ghi</p></div>'
-            + '<button onclick="document.getElementById(\'queue-history-modal\').remove()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-muted); padding:4px 8px;">✕</button>'
-            + '</div>'
-            + '<div style="overflow-y:auto; flex:1; padding:16px;">' + (content || '<div style="text-align:center; padding:30px; color:var(--text-muted);">Không có dữ liệu</div>') + '</div>'
-            + '</div></div>';
+        modal.innerHTML = `
+            <div style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:99999; display:flex; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target===this) this.remove();">
+                <div style="background:var(--card-bg); border-radius:16px; max-width:900px; width:100%; max-height:85vh; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.4); display:flex; flex-direction:column;">
+                    <div style="padding:16px 20px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <h3 style="margin:0; font-size:16px; color:var(--text-color);">📋 Lịch sử Turn — ${brName}</h3>
+                            <p style="margin:4px 0 0; font-size:12px; color:var(--text-muted);">${snap.size} bản ghi gần nhất</p>
+                        </div>
+                        <button onclick="document.getElementById('queue-history-modal').remove()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-muted); padding:4px 8px;">✕</button>
+                    </div>
+                    <div style="overflow-y:auto; flex:1;">
+                        <table style="width:100%; border-collapse:collapse; min-width:700px;">
+                            <thead>
+                                <tr style="background:var(--bg-color); position:sticky; top:0;">
+                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Thời gian</th>
+                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Loại</th>
+                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Chi tiết</th>
+                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Index</th>
+                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Người thực hiện</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>`;
     } catch (e) {
+        // Có thể cần composite index
         if (e.message?.includes('index')) {
-            alert('⚠️ Cần tạo Firestore Index cho queue_logs.\n\nCollection: queue_logs\nFields: branchId ASC, createdAt DESC');
+            alert('⚠️ Cần tạo Firestore Index cho queue_logs.\\n\\nVui lòng mở Console Firebase → Firestore → Indexes → Tạo index:\\nCollection: queue_logs\\nFields: branchId ASC, createdAt DESC');
         } else {
             alert('Lỗi: ' + e.message);
         }
     }
 };
-
 
 // Admin: Đẩy GV cuối hàng lên Top 1 (hoàn tác cắt lượt nhầm)
 window.rewindQueueToLast = async function () {
@@ -4253,7 +5727,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (financeTab) financeTab.style.display = 'flex';
             const clbAdminActions = document.getElementById('clb-admin-actions');
             if (clbAdminActions) clbAdminActions.style.display = 'flex';
-
+            const qDbg = document.getElementById('btn-queue-debug');
+            if (qDbg) qDbg.style.display = 'inline-flex';
             const qHist = document.getElementById('btn-queue-history');
             if (qHist) qHist.style.display = 'inline-flex';
             document.querySelector('[data-tab="dashboard"]').click();
@@ -4298,9 +5773,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (clbTab) clbTab.style.display = 'flex';
             if (financeTab) financeTab.style.display = 'flex';
             if (saleStatsTab) saleStatsTab.style.display = 'flex';
-            const clbAdminActions2 = document.getElementById('clb-admin-actions');
-            if (clbAdminActions2) clbAdminActions2.style.display = 'flex';
-
+            const qDbg2 = document.getElementById('btn-queue-debug');
+            if (qDbg2) qDbg2.style.display = 'inline-flex';
             const qHist2 = document.getElementById('btn-queue-history');
             if (qHist2) qHist2.style.display = 'inline-flex';
             document.querySelector('[data-tab="dashboard"]').click();
@@ -4399,10 +5873,9 @@ document.addEventListener('DOMContentLoaded', () => {
             'TEACHER': '🏊 Huấn luyện viên',
             'LETAN': '📋 Lễ tân',
             'KETOAN': '💰 Kế toán',
-            'KHACHHANG': '👤 Khách hàng',
-            'VIEWER': '👁️ Giám sát'
+            'KHACHHANG': '👤 Khách hàng'
         };
-        const displayRole = roleNames[role] || role;
+        const displayRole = roleNames[role] || 'Học viên';
 
         const nameEl = document.getElementById('current-user-name');
         const roleEl = document.getElementById('current-user-role');
@@ -4582,7 +6055,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <optgroup label="🤿 Lặn">
                                 <option value="Dolphin 1">🤿 Dolphin 1 (4 buổi)</option>
                                 <option value="Dolphin 2">🤿 Dolphin 2 (5 buổi)</option>
-                                <option value="Basic Mermaid">🧜 Basic Mermaid (5 buổi)</option>
+                                <option value="Lặn Tiên cá">🧜 Lặn Tiên cá (4 buổi)</option>
                                 <option value="Trải nghiệm Tiên cá">🧜 Trải nghiệm Tiên cá (1 buổi)</option>
                             </optgroup>
                             <optgroup label="Khác">
@@ -4702,13 +6175,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!teacherId) return alert('❌ Chưa chọn Giáo viên tự tuyển!');
                     if (!selfRecruitReason) return alert('❌ Vui lòng chọn Lý do tự tuyển!');
 
-                    // Kiểm tra trùng số hợp đồng (cả HV + VĐV CLB cùng cơ sở)
+                    // Kiểm tra trùng số hợp đồng (client-side filter)
                     if (contractNumber) {
-                        const dupMsg = await checkDuplicateContract(contractNumber, currentBranchId);
-                        if (dupMsg) return alert(dupMsg);
+                        const allBranch = await db.collection('students')
+                            .where('branchId', '==', currentBranchId)
+                            .get();
+                        const dup = allBranch.docs.find(doc => doc.data().contractNumber === contractNumber);
+                        if (dup) {
+                            return alert(`Số hợp đồng "${contractNumber}" đã tồn tại! Vui lòng kiểm tra lại.`);
+                        }
                     }
 
-                    const selfTotalSessions = DIVING_CURRICULUMS[curriculum] || ((curriculum === 'Ếch Vip' || curriculum === 'Sải Vip') ? 15 : (curriculum === 'PT' ? (parseInt(ptSessions) || 10) : 10));
+                    const selfTotalSessions = (curriculum === 'Ếch Vip' || curriculum === 'Sải Vip') ? 15 : (curriculum === 'PT' ? (parseInt(ptSessions) || 10) : 10);
                     const isTestStudent = document.getElementById('sale-student-test-1')?.checked || false;
                     await db.collection('students').add({
                         name, phone, gender, ageCategory, age: age || 0, assignedTeacherId: teacherId,
@@ -4813,13 +6291,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         isDiving = true;
                     }
 
-                    const isLastStudent = (i === count);
+                    const isFirstStudent = (i === 1);
                     const isTest = document.getElementById(`sale-student-test-${i}`)?.checked || false;
                     // Lặn: không theo queue (isDiving=true → truyền isException=true để skip queue, nhưng không ghi nợ)
-                    const isExceptionForThisStudent = isDiving ? true : (isSaleExceptionMode && (i === 1));
-                    // Chỉ advance queue khi là HV CUỐI CÙNG trong lượt
-                    const skipQueue = (!isLastStudent && !isDiving && !isExceptionForThisStudent);
-                    await saleAssignStudent(name, phone, gender, ageCategory, contractNumber, finalTeacherId, curriculum, ptSessions, isExceptionForThisStudent, age, isTest, isDiving, skipQueue);
+                    const isExceptionForThisStudent = isDiving ? true : (isSaleExceptionMode && isFirstStudent);
+                    await saleAssignStudent(name, phone, gender, ageCategory, contractNumber, finalTeacherId, curriculum, ptSessions, isExceptionForThisStudent, age, isTest, isDiving);
                 }
 
                 alert(`✅ Đã gán ${count} học viên thành công!`);
@@ -4851,14 +6327,10 @@ document.addEventListener('DOMContentLoaded', () => {
     window.confirmSalary = async function (studentId, studentName) {
         if (!confirm(`Xác nhận CHỐT LƯƠNG cho học viên "${studentName}"? Hành động này không thể hoàn tác.`)) return;
         try {
-            const now = new Date();
-            const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
             await db.collection('students').doc(studentId).update({
                 salaryConfirmed: true,
                 salaryConfirmedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                salaryConfirmedBy: currentUserId,
-                salarySubmittedMonth: month,
-                salarySubmittedAt: firebase.firestore.FieldValue.serverTimestamp()
+                salaryConfirmedBy: currentUserId
             });
             // Thông báo Sale: GV đã chốt lương
             const stuDoc = await db.collection('students').doc(studentId).get();
@@ -5074,9 +6546,9 @@ async function initFixedBranches() {
 
     // Ẩn/hiện phần quản lý cơ sở theo quyền (chỉ ADMIN thấy)
     const branchSection = document.getElementById('settings-branch-section');
-    if (branchSection) branchSection.style.display = (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') ? 'block' : 'none';
+    if (branchSection) branchSection.style.display = currentUserRole === 'ADMIN' ? 'block' : 'none';
     const addForm = document.getElementById('settings-add-branch-form');
-    if (addForm) addForm.style.display = (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') ? 'block' : 'none';
+    if (addForm) addForm.style.display = currentUserRole === 'ADMIN' ? 'block' : 'none';
 
     // Render danh sách cơ sở trong tab Cài đặt
     renderSettingsBranchList();
@@ -5091,7 +6563,7 @@ function renderSettingsBranchList() {
     container.innerHTML = '';
     FIXED_BRANCHES.forEach((b, idx) => {
         const isPaused = b.paused || false;
-        const pauseBtn = (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') ? (isPaused
+        const pauseBtn = currentUserRole === 'ADMIN' ? (isPaused
             ? `<button class="btn btn-sm" onclick="toggleBranchPause('${b.id}', false)" style="height:30px; font-size:11px; white-space:nowrap; background:rgba(34,197,94,0.1); color:#16a34a; border:1px solid rgba(34,197,94,0.3);"><i class="fa-solid fa-play"></i> Kích hoạt</button>`
             : `<button class="btn btn-sm" onclick="toggleBranchPause('${b.id}', true)" style="height:30px; font-size:11px; white-space:nowrap; background:rgba(245,158,11,0.1); color:#d97706; border:1px solid rgba(245,158,11,0.3);"><i class="fa-solid fa-pause"></i> Tạm dừng</button>`
         ) : '';
@@ -5748,7 +7220,7 @@ function loadAdminUsers() {
         snap.docs.forEach(doc => {
             const u = doc.data();
 
-            const currentBranchId = u.branchId || (localState.branches.length > 0 ? localState.branches[0].id : FIXED_BRANCHES[0]?.id || ''); // Mặc định cơ sở đầu tiên nếu chưa có
+            const currentBranchId = u.branchId || localState.branches[0].id; // Mặc định cơ sở đầu tiên nếu chưa có
 
             // NẾU LÀ MANAGER THÌ CHỈ THẤY USER ĐĂNG KÝ VÀO CƠ SỞ CỦA MÌNH
             if (currentUserRole === 'MANAGER' && currentBranchId !== currentUserId) {
@@ -6770,7 +8242,7 @@ function loadAdminDetailedOverview() {
                     const reasonText = reasons.length > 0 ? reasons[reasons.length - 1] : '';
                     fullHtml += `<div style="padding:3px 0; border-bottom:1px dashed rgba(239,68,68,0.1);">`;
                     fullHtml += `<div style="display:flex; justify-content:space-between; font-size:12px;"><span>${pc[tid].name}</span><span style="color:var(--danger); font-weight:700;">${pc[tid].count} lần`;
-                    if (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') { fullHtml += ` <button onclick="boostTeacher('${tid}','${pc[tid].name.replace(/'/g, "\\\\'")}')" style="padding:1px 5px; font-size:10px; border-radius:4px; border:1px solid rgba(34,197,94,0.4); background:rgba(34,197,94,0.1); color:#16a34a; cursor:pointer;" title="Ưu tiên"><i class="fa-solid fa-arrow-up"></i></button> <button onclick="clearTeacherDebt('${tid}','${pc[tid].name.replace(/'/g, "\\\\'")}')" style="padding:1px 5px; font-size:10px; border-radius:4px; border:1px solid rgba(59,130,246,0.4); background:rgba(59,130,246,0.1); color:#3b82f6; cursor:pointer;" title="Xóa nợ lượt"><i class="fa-solid fa-eraser"></i></button>`; }
+                    if (currentUserRole === 'ADMIN') { fullHtml += ` <button onclick="boostTeacher('${tid}','${pc[tid].name.replace(/'/g, "\\\\'")}')" style="padding:1px 5px; font-size:10px; border-radius:4px; border:1px solid rgba(34,197,94,0.4); background:rgba(34,197,94,0.1); color:#16a34a; cursor:pointer;" title="Ưu tiên"><i class="fa-solid fa-arrow-up"></i></button> <button onclick="clearTeacherDebt('${tid}','${pc[tid].name.replace(/'/g, "\\\\'")}')" style="padding:1px 5px; font-size:10px; border-radius:4px; border:1px solid rgba(59,130,246,0.4); background:rgba(59,130,246,0.1); color:#3b82f6; cursor:pointer;" title="Xóa nợ lượt"><i class="fa-solid fa-eraser"></i></button>`; }
                     fullHtml += `</span></div>`;
                     if (reasonText) { fullHtml += `<div style="font-size:10px; color:var(--text-muted); margin-top:1px;">💬 ${reasonText}</div>`; }
                     fullHtml += `</div>`;
@@ -7167,7 +8639,7 @@ window.filterAdminClbStudents = function () {
 
 // ============ GIA HẠN VĐV CLB ============ //
 window.renewClbAthlete = async function (athleteId, athleteName) {
-    if (currentUserRole !== 'ADMIN' && currentUserRole !== 'MANAGER') return alert('⚠️ Chỉ Admin/Quản lý được gia hạn!');
+    if (currentUserRole !== 'ADMIN') return alert('⚠️ Chỉ Admin được gia hạn!');
 
     // Lấy thông tin VĐV hiện tại
     const athlete = _adminClbData.find(a => a.id === athleteId) || {};
@@ -7182,7 +8654,6 @@ window.renewClbAthlete = async function (athleteId, athleteName) {
     // Default: số tháng cũ tính từ hôm nay
     const defaultDate = new Date();
     defaultDate.setMonth(defaultDate.getMonth() + oldMonths);
-    defaultDate.setDate(defaultDate.getDate() - 1); // HSD = kích hoạt + N tháng - 1 ngày
     const defaultStr = defaultDate.toISOString().split('T')[0];
     const inputStyle = 'width:100%; padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-color); font-size:13px; margin-bottom:10px;';
 
@@ -7273,8 +8744,7 @@ window.renewClbAthlete = async function (athleteId, athleteName) {
                 renewedAt: firebase.firestore.FieldValue.serverTimestamp(),
                 renewedBy: currentUserId,
                 previousContractNumber: oldContract,
-                renewCount: firebase.firestore.FieldValue.increment(1),
-                bonusDays: 0
+                renewCount: firebase.firestore.FieldValue.increment(1)
             };
             // Update cả 2 collection
             const results = await Promise.allSettled([
@@ -7287,15 +8757,15 @@ window.renewClbAthlete = async function (athleteId, athleteName) {
             // Sync lên Google Sheet
             const brId = athlete.branchId || currentBranchId;
             const branchObj = FIXED_BRANCHES.find(b => b.id === brId);
-            syncClbRowToSheet({
-                action: 'renewClbRow',
-                branchName: 'CLB_' + (branchObj?.name || 'N/A'),
+            syncToGoogleSheet({
+                action: 'renewClb',
+                branchName: branchObj?.name || 'N/A',
                 name: athleteName,
                 oldContract: oldContract,
                 newContract: newContract,
                 activatedAt: new Date().toLocaleDateString('vi-VN'),
                 expiresAt: newExpiry.toLocaleDateString('vi-VN'),
-                pkg: `${newSessions}b/tuần × ${newMonths} tháng`
+                package: `${newSessions}b/tuần × ${newMonths} tháng`
             });
 
             overlay.remove();
@@ -7320,8 +8790,8 @@ window.changeSaleForStudent = async function (studentId) {
         // Load danh sách Sale + Admin
         const usersSnap = await db.collection('users').get();
         const sales = usersSnap.docs.filter(d => {
-            const u = d.data();
-            return (u.role === 'SALE' || u.role === 'ADMIN') && (!u.branchId || u.branchId === currentBranchId);
+            const r = d.data().role;
+            return r === 'SALE' || r === 'ADMIN';
         }).map(d => ({ id: d.id, name: d.data().name }));
 
         const list = sales.map((s, i) => `${i + 1}. ${s.name}`).join('\n');
@@ -7351,8 +8821,8 @@ window.changeSaleForAthlete = async function (athleteId) {
 
         const usersSnap = await db.collection('users').get();
         const sales = usersSnap.docs.filter(d => {
-            const u = d.data();
-            return (u.role === 'SALE' || u.role === 'ADMIN') && (!u.branchId || u.branchId === currentBranchId);
+            const r = d.data().role;
+            return r === 'SALE' || r === 'ADMIN';
         }).map(d => ({ id: d.id, name: d.data().name }));
 
         const list = sales.map((s, i) => `${i + 1}. ${s.name}`).join('\n');
@@ -7394,10 +8864,8 @@ window.bulkTransferClbToSale = async function () {
         }
 
         // Danh sách Sale
-        const sales = usersSnap.docs.filter(d => {
-            const u = usersMap[d.id];
-            return u.role === 'SALE' && (!u.branchId || u.branchId === currentBranchId);
-        }).map(d => ({ id: d.id, name: usersMap[d.id].name }));
+        const sales = usersSnap.docs.filter(d => usersMap[d.id].role === 'SALE')
+            .map(d => ({ id: d.id, name: usersMap[d.id].name }));
 
         if (sales.length === 0) return alert('Không có Sale nào!');
 
@@ -7575,7 +9043,6 @@ window.addAthlete = async function () {
         activatedAt = new Date(activateDateStr);
         expiresAt = new Date(activatedAt);
         expiresAt.setMonth(expiresAt.getMonth() + contractMonths);
-        expiresAt.setDate(expiresAt.getDate() - 1); // HSD = kích hoạt + N tháng - 1 ngày
     }
 
     try {
@@ -7603,8 +9070,7 @@ window.addAthlete = async function () {
                             isFrozen: false,
                             activatedAt: activatedAt || null,
                             expiresAt: expiresAt || null,
-                            contractHistory: oldContracts,
-                            bonusDays: 0
+                            contractHistory: oldContracts
                         });
                         // Auto sync CLB gia hạn lên Google Sheet
                         const brNameSync1 = FIXED_BRANCHES.find(b => b.id === (currentBranchId || currentUserBranchId))?.name || 'N/A';
@@ -7631,12 +9097,6 @@ window.addAthlete = async function () {
                     return;
                 }
             }
-        }
-
-        // Kiểm tra trùng số hợp đồng (cả HV + VĐV CLB cùng cơ sở)
-        if (contractNumber) {
-            const dupMsg = await checkDuplicateContract(contractNumber, currentBranchId || currentUserBranchId);
-            if (dupMsg) return alert(dupMsg);
         }
 
         await db.collection('athletes').add({
@@ -7710,7 +9170,6 @@ window.addAthleteSale = async function () {
         activatedAt = new Date(activateDateVal);
         expiresAt = new Date(activateDateVal);
         expiresAt.setMonth(expiresAt.getMonth() + contractMonths);
-        expiresAt.setDate(expiresAt.getDate() - 1); // HSD = kích hoạt + N tháng - 1 ngày
     }
 
     if (!name) return alert('⚠️ Vui lòng nhập họ tên VĐV!');
@@ -7756,8 +9215,7 @@ window.addAthleteSale = async function () {
                             isFrozen: false,
                             activatedAt: newActivatedAt || null,
                             expiresAt: newExpiresAt || null,
-                            contractHistory: oldContracts,
-                            bonusDays: 0
+                            contractHistory: oldContracts
                         };
                         await db.collection('athletes').doc(existDoc.id).update(updateData);
                         // Auto sync CLB gia hạn lên Google Sheet (Sale tab)
@@ -7788,12 +9246,6 @@ window.addAthleteSale = async function () {
                     return;
                 }
             }
-        }
-
-        // Kiểm tra trùng số hợp đồng (cả HV + VĐV CLB cùng cơ sở)
-        if (contractNumber) {
-            const dupMsg = await checkDuplicateContract(contractNumber, currentBranchId || currentUserBranchId);
-            if (dupMsg) return alert(dupMsg);
         }
 
         await db.collection('athletes').add({
@@ -7862,13 +9314,11 @@ function listenToAthletes() {
 
     // Load danh sách Sale vào dropdown
     const saleSelect = document.getElementById('clb-sale');
-    if (saleSelect) {
-        // Xóa options cũ (giữ option đầu "-- Sale quản lý --")
-        while (saleSelect.options.length > 1) saleSelect.remove(1);
+    if (saleSelect && saleSelect.options.length <= 1) {
         db.collection('users').get().then(snap => {
             snap.docs.forEach(d => {
                 const u = d.data();
-                if ((u.role === 'SALE' || u.role === 'ADMIN') && (!u.branchId || u.branchId === currentBranchId)) {
+                if (u.role === 'SALE' || u.role === 'ADMIN') {
                     const opt = document.createElement('option');
                     opt.value = d.id;
                     opt.textContent = u.name;
@@ -7900,7 +9350,7 @@ function listenToAthletes() {
         renderClbTable();
         populateClbClassDropdowns(); // Populate dropdown lớp theo GV
         // Auto-fix creatorId nếu creatorName đã đổi nhưng creatorId chưa đổi
-        if (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') migrateClbCreatorIds();
+        if (currentUserRole === 'ADMIN') migrateClbCreatorIds();
     });
 }
 
@@ -7916,7 +9366,7 @@ window.exportClbExcel = function () {
     const classOrder = { 'Mầm': 0, 'D1': 1, 'D2': 2, 'C': 3, 'B': 4, 'A': 5 };
     data.sort((a, b) => (classOrder[a.classLevel] || 0) - (classOrder[b.classLevel] || 0) || a.name.localeCompare(b.name, 'vi'));
 
-    const rows = [['STT', 'Họ và tên', 'Số hợp đồng', 'Loại hợp đồng', 'Ngày kích hoạt', 'Lớp tập luyện', 'Giáo viên phụ trách', 'SĐT', 'Trạng thái']];
+    const rows = [['STT', 'Họ và tên', 'Số hợp đồng', 'Loại hợp đồng', 'Ngày kích hoạt', 'Lớp tập luyện', 'SĐT', 'Trạng thái']];
 
     data.forEach((a, i) => {
         const contractType = `${a.contractMonths || '?'} tháng ${a.sessionsPerWeek || '?'} buổi/tuần`;
@@ -7926,8 +9376,7 @@ window.exportClbExcel = function () {
             activatedDate = d.toLocaleDateString('vi-VN');
         }
         const status = a.isFrozen ? 'Bảo lưu' : 'Đang học';
-        const coachName = a.assignedCoachName || '';
-        rows.push([i + 1, a.name, a.contractNumber || '', contractType, activatedDate, a.classLevel || '', coachName, a.phone || '', status]);
+        rows.push([i + 1, a.name, a.contractNumber || '', contractType, activatedDate, a.classLevel || '', a.phone || '', status]);
     });
 
     const brName = FIXED_BRANCHES.find(b => b.id === (currentBranchId || currentUserBranchId))?.name || 'CS';
@@ -8151,14 +9600,14 @@ window.renderClbTable = async function () {
         if (canPromote) {
             actionsHtml += `<button class="btn btn-sm" onclick="promoteAthlete('${a.id}', '${a.classLevel}')" style="font-size:11px; padding:4px 8px; background:rgba(16,185,129,0.1); color:#10b981; border:1px solid rgba(16,185,129,0.3);"><i class="fa-solid fa-arrow-up"></i> ${nextLevel}</button>`;
         }
-        if (!a.isExpired && !a.isFrozen && a.activatedAt && (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER')) {
+        if (!a.isExpired && !a.isFrozen && a.activatedAt && currentUserRole === 'ADMIN') {
             actionsHtml += ` <button class="btn btn-sm" onclick="extendAthlete('${a.id}')" style="font-size:11px; padding:4px 8px; background:rgba(245,158,11,0.1); color:#d97706; border:1px solid rgba(245,158,11,0.3);"><i class="fa-solid fa-calendar-plus"></i></button>`;
             actionsHtml += ` <button class="btn btn-sm" onclick="freezeAthlete('${a.id}')" style="font-size:11px; padding:4px 8px; background:rgba(99,102,241,0.1); color:#6366f1; border:1px solid rgba(99,102,241,0.3);"><i class="fa-solid fa-pause"></i> BL</button>`;
         }
-        if (a.isFrozen && (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER')) {
+        if (a.isFrozen && currentUserRole === 'ADMIN') {
             actionsHtml += ` <button class="btn btn-sm" onclick="unfreezeAthlete('${a.id}')" style="font-size:11px; padding:4px 8px; background:rgba(34,197,94,0.1); color:#16a34a; border:1px solid rgba(34,197,94,0.3);"><i class="fa-solid fa-play"></i> Mở BL</button>`;
         }
-        if (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') {
+        if (currentUserRole === 'ADMIN') {
             actionsHtml += ` <button class="btn btn-sm" onclick="editAthlete('${a.id}')" style="font-size:11px; padding:4px 8px; background:rgba(59,130,246,0.1); color:#3b82f6; border:1px solid rgba(59,130,246,0.3);"><i class="fa-solid fa-pen"></i></button>`;
             actionsHtml += ` <button class="btn btn-sm" onclick="deleteAthlete('${a.id}', '${a.name.replace(/'/g, "\\\\'")}')" style="font-size:11px; padding:4px 8px; background:rgba(239,68,68,0.1); color:#ef4444; border:1px solid rgba(239,68,68,0.3);"><i class="fa-solid fa-trash"></i></button>`;
             actionsHtml += ` <button class="btn btn-sm" onclick="assignCoachToAthlete('${a.id}', '${a.name.replace(/'/g, "\\\\'")}', '${a.classLevel}')" style="font-size:11px; padding:4px 8px; background:rgba(139,92,246,0.1); color:#8b5cf6; border:1px solid rgba(139,92,246,0.3);" title="Gán GV"><i class="fa-solid fa-user-tag"></i> ${a.assignedCoachName || ''}</button>`;
@@ -8171,7 +9620,7 @@ window.renderClbTable = async function () {
                     ${a.phone ? `<div style="font-size:12px; color:var(--text-muted);">${a.phone}</div>` : ''}
                     ${a.contractNumber ? `<div style="font-size:11px; color:var(--text-muted);">HĐ: ${a.contractNumber}</div>` : ''}
                     <div style="font-size:11px; color:var(--primary); font-weight:600;">Đã học: ${a.totalAttendance || 0} buổi</div>
-                    ${a.creatorName ? `<div style="font-size:11px; color:var(--text-muted);"><i class="fa-solid fa-user-tag"></i> Sale: ${a.creatorName} ${(currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') ? `<button onclick="changeSaleForAthlete('${a.id}')" style="margin-left:4px; padding:1px 5px; border:none; background:rgba(59,130,246,0.1); color:#3b82f6; border-radius:3px; cursor:pointer; font-size:10px;" title="Đổi Sale"><i class="fa-solid fa-right-left"></i></button>` : ''}</div>` : ''}
+                    ${a.creatorName ? `<div style="font-size:11px; color:var(--text-muted);"><i class="fa-solid fa-user-tag"></i> Sale: ${a.creatorName} ${currentUserRole === 'ADMIN' ? `<button onclick="changeSaleForAthlete('${a.id}')" style="margin-left:4px; padding:1px 5px; border:none; background:rgba(59,130,246,0.1); color:#3b82f6; border-radius:3px; cursor:pointer; font-size:10px;" title="Đổi Sale"><i class="fa-solid fa-right-left"></i></button>` : ''}</div>` : ''}
                     <div style="margin-top:4px;">
                         ${(currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER')
                 ? `<textarea id="note-${a.id}" placeholder="📝 Phương án vào bể..." onblur="saveAthleteNote('${a.id}', this.value)" style="width:100%; min-height:28px; max-height:60px; padding:4px 6px; font-size:11px; border:1px solid var(--border-color); border-radius:5px; background:var(--card-bg); color:var(--text-color); resize:vertical; box-sizing:border-box;">${(a.athleteNote || '').replace(/</g, '&lt;')}</textarea>`
@@ -8327,8 +9776,7 @@ window.bulkExtendHoliday = async function () {
             if (d.isFrozen || !d.expiresAt) return;
             const exp = d.expiresAt.toDate ? d.expiresAt.toDate() : new Date(d.expiresAt);
             exp.setDate(exp.getDate() + days);
-            const oldBonus = d.bonusDays || 0;
-            batch.update(doc.ref, { expiresAt: exp, bonusDays: oldBonus + days });
+            batch.update(doc.ref, { expiresAt: exp });
             count++;
         });
         await batch.commit();
@@ -8349,9 +9797,8 @@ window.extendAthlete = async function (athleteId) {
         if (!d.expiresAt) return alert('VĐV chưa kích hoạt HĐ!');
         const exp = d.expiresAt.toDate ? d.expiresAt.toDate() : new Date(d.expiresAt);
         exp.setDate(exp.getDate() + days);
-        const oldBonus = d.bonusDays || 0;
-        await db.collection('athletes').doc(athleteId).update({ expiresAt: exp, bonusDays: oldBonus + days });
-        alert(`✅ Đã gia hạn ${days} ngày cho ${d.name}! Hạn mới: ${exp.toLocaleDateString('vi-VN')}\n📊 Tổng ngày gia hạn: ${oldBonus + days} ngày`);
+        await db.collection('athletes').doc(athleteId).update({ expiresAt: exp });
+        alert(`✅ Đã gia hạn ${days} ngày cho ${d.name}! Hạn mới: ${exp.toLocaleDateString('vi-VN')}`);
     } catch (e) {
         alert('Lỗi: ' + e.message);
     }
@@ -8391,15 +9838,13 @@ window.unfreezeAthlete = async function (athleteId) {
         // Nếu HĐ đã qua hạn trong lúc BL thì tính từ hôm nay
         if (exp < now) exp = now;
         exp.setDate(exp.getDate() + 30);
-        const oldBonus = d.bonusDays || 0;
 
         await db.collection('athletes').doc(athleteId).update({
             isFrozen: false,
             frozenAt: null,
             frozenUntil: null,
             expiresAt: exp,
-            isExpired: false,
-            bonusDays: oldBonus + 30
+            isExpired: false
         });
         alert(`✅ Đã mở bảo lưu ${d.name}! Hạn mới: ${exp.toLocaleDateString('vi-VN')}`);
     } catch (e) {
@@ -8448,24 +9893,16 @@ window.editAthlete = async function (athleteId) {
             contractMonths: parseInt(contractMonths) || a.contractMonths
         };
 
-        // Cập nhật ngày kích hoạt + tự tính ngày hết hạn (giữ bonusDays)
+        // Cập nhật ngày kích hoạt + tự tính ngày hết hạn
         if (newDateStr.trim()) {
             const newDate = new Date(newDateStr.trim());
             if (!isNaN(newDate.getTime())) {
                 updates.activatedAt = newDate;
                 const months = parseInt(contractMonths) || a.contractMonths || 3;
-                const bonus = a.bonusDays || 0;
                 const expires = new Date(newDate);
                 expires.setMonth(expires.getMonth() + months);
-                expires.setDate(expires.getDate() - 1); // HSD = kích hoạt + N tháng - 1 ngày
-                if (bonus > 0) {
-                    expires.setDate(expires.getDate() + bonus); // Cộng lại ngày gia hạn
-                }
                 updates.expiresAt = expires;
                 updates.isExpired = expires < new Date();
-                if (bonus > 0) {
-                    alert(`ℹ️ VĐV có ${bonus} ngày gia hạn → đã tự cộng lại vào HSD mới.`);
-                }
             }
         }
 
@@ -8554,17 +9991,11 @@ window.importClbCsv = async function (input) {
                 if (parts.length === 3) {
                     const d = parseInt(parts[0]), m = parseInt(parts[1]) - 1, y = parseInt(parts[2]);
                     activatedAt = new Date(y, m, d);
-                    expiresAt = new Date(y, m + contractMonths, d - 1); // HSD = kích hoạt + N tháng - 1 ngày
+                    expiresAt = new Date(y, m + contractMonths, d);
                 }
             }
 
             try {
-                // Kiểm tra trùng số hợp đồng
-                if (contractNumber && contractNumber !== 'Chưa có') {
-                    const dupMsg = await checkDuplicateContract(contractNumber, brId);
-                    if (dupMsg) { errors.push(`Dòng ${i + 2}: ${dupMsg}`); continue; }
-                }
-
                 await db.collection('athletes').add({
                     name, phone, gender: 'Nam',
                     contractNumber, classLevel,
@@ -8824,7 +10255,6 @@ window.markClbAttendance = async function (athleteId) {
             updates.activatedAt = firebase.firestore.FieldValue.serverTimestamp();
             const expDate = new Date();
             expDate.setMonth(expDate.getMonth() + (a.contractMonths || 1));
-            expDate.setDate(expDate.getDate() - 1); // HSD = kích hoạt + N tháng - 1 ngày
             updates.expiresAt = expDate;
             alert(`🎯 Kích hoạt HĐ! Hết hạn: ${expDate.toLocaleDateString('vi-VN')}`);
         }
@@ -9303,18 +10733,18 @@ window.renderFinanceTab = async function () {
 
         // Bảng giá tiền công GV
         const SALARY_PRICE_MAP = {
-            'Bơi Ếch Trẻ em': 750000, 'Bơi Ếch': 750000,
-            'Bơi Sải Trẻ em': 900000, 'Bơi Sải': 900000,
+            'Ếch Trẻ em': 750000, 'Bơi Ếch': 750000,
+            'Sải Trẻ em': 900000, 'Bơi Sải': 900000,
             'Ếch Vip Trẻ em': 1312000, 'Ếch Vip': 1312000,
             'Sải Vip Trẻ em': 1487500, 'Sải Vip': 1487500,
-            'Bơi Ếch Người lớn': 900000,
-            'Bơi Sải Người lớn': 1050000,
+            'Ếch Người lớn': 900000,
+            'Sải Người lớn': 1050000,
             'Ếch Vip Người lớn': 1487500,
             'Sải Vip Người lớn': 1662000,
             'Bơi Ngửa': 1050000,
             'Bơi Bướm': 1650000,
             'PT': 200000, // tính theo buổi
-            'Dolphin 1': 1225000, 'Dolphin 2': 1925000, 'Basic Mermaid': 0, 'Trải nghiệm Tiên cá': 0
+            'Dolphin 1': 0, 'Dolphin 2': 0, 'Lặn Tiên cá': 0, 'Trải nghiệm Tiên cá': 0 // Anh cập nhật giá sau
         };
 
         function calcSalary(s) {
@@ -9437,14 +10867,14 @@ function downloadXLSX(rows, filename, sheetName) {
 
 function salaryPrice(s) {
     const MAP = {
-        'Bơi Ếch Trẻ em': 750000, 'Bơi Ếch': 750000,
-        'Bơi Sải Trẻ em': 900000, 'Bơi Sải': 900000,
+        'Ếch Trẻ em': 750000, 'Bơi Ếch': 750000,
+        'Sải Trẻ em': 900000, 'Bơi Sải': 900000,
         'Ếch Vip Trẻ em': 1312000, 'Ếch Vip': 1312000,
         'Sải Vip Trẻ em': 1487500, 'Sải Vip': 1487500,
-        'Bơi Ếch Người lớn': 900000, 'Bơi Sải Người lớn': 1050000,
+        'Ếch Người lớn': 900000, 'Sải Người lớn': 1050000,
         'Ếch Vip Người lớn': 1487500, 'Sải Vip Người lớn': 1662000,
         'Bơi Ngửa': 1050000, 'Bơi Bướm': 1650000, 'PT': 200000,
-        'Dolphin 1': 1225000, 'Dolphin 2': 1925000, 'Basic Mermaid': 0, 'Trải nghiệm Tiên cá': 0
+        'Dolphin 1': 0, 'Dolphin 2': 0, 'Lặn Tiên cá': 0, 'Trải nghiệm Tiên cá': 0
     };
     const cur = s.curriculum || 'Bơi Ếch';
     const age = s.ageCategory || 'Trẻ em';
@@ -9469,25 +10899,12 @@ function buildSalaryRows(submissions) {
     rows.push(['', '', '', '', '', '', '', '', '', 'TỔNG CỘNG:', grandTotal]);
     return rows;
 }
-// Xuất Excel từng GV: bỏ cột Buổi + Thành tiền
-function buildTeacherSalaryRows(submissions) {
-    const rows = [['STT', 'Giáo viên', 'Cơ sở', 'Họ tên HV', 'SĐT', 'Số HĐ', 'Kiểu bơi', 'Độ tuổi', 'Sale', 'Sale XN']];
-    let idx = 0;
-    submissions.forEach(sub => {
-        const branchName = FIXED_BRANCHES.find(b => b.id === sub.branchId)?.name || sub.branchId;
-        (sub.students || []).forEach(s => {
-            idx++;
-            rows.push([idx, sub.teacherName, branchName, s.name, s.phone || '', s.contractNumber || '', s.curriculum || 'Bơi Ếch', s.ageCategory === 'Người lớn' ? 'Người lớn' : 'Trẻ em', s.creatorName || s.saleName || '', s.saleConfirmedBy || '']);
-        });
-    });
-    return rows;
-}
 
 window.exportTeacherSalary = function (idx) {
     const subs = window._financeSubmissions;
     if (!subs || !subs[idx]) return alert('Không tìm thấy dữ liệu!');
     const sub = subs[idx];
-    const rows = buildTeacherSalaryRows([sub]);
+    const rows = buildSalaryRows([sub]);
     const month = window._financeMonth || '';
     downloadXLSX(rows, `Luong_${sub.teacherName.replace(/\s+/g, '_')}_${month}.xlsx`, 'Lương GV');
 };
@@ -9508,13 +10925,24 @@ window.submitSalary = async function () {
     const monthLabel = `Tháng ${now.getMonth() + 1}/${now.getFullYear()}`;
 
     try {
+        // Kiểm tra đã chốt tháng này chưa
+        const existCheck = await db.collection('salary_submissions')
+            .where('teacherId', '==', currentUserId)
+            .where('month', '==', month)
+            .where('branchId', '==', currentBranchId)
+            .get();
+        if (!existCheck.empty) {
+            alert(`❌ Bạn đã chốt lương ${monthLabel} rồi!\n\nMỗi tháng chỉ được chốt 1 lần.`);
+            return;
+        }
+
         // Lấy danh sách HV của GV này
         const studSnap = await db.collection('students')
             .where('assignedTeacherId', '==', currentUserId)
             .where('branchId', '==', currentBranchId)
             .get();
 
-        // Lấy danh sách HV đã chốt ở các tháng trước (tránh trùng gói thường)
+        // Lấy danh sách HV đã chốt ở tháng trước (tránh trùng)
         const prevSnap = await db.collection('salary_submissions')
             .where('teacherId', '==', currentUserId)
             .get();
@@ -9531,7 +10959,7 @@ window.submitSalary = async function () {
         });
 
         // Lọc HV đủ điều kiện
-        // - Gói thường: đủ buổi + ≥7 buổi + chưa chốt tháng này
+        // - Gói thường: đủ buổi + ≥7 buổi
         // - Gói PT: đã dạy ≥ 50% khóa, chốt theo buổi đã ĐD (trừ buổi đã chốt)
         const eligible = [];
         const notEligible = [];
@@ -9541,9 +10969,6 @@ window.submitSalary = async function () {
             const sessions = s.sessions || 0;
             const total = s.totalSessions || 10;
             const cur = s.curriculum || 'Bơi Ếch';
-
-            // Bỏ qua HV đã chốt tháng này (đã bấm chốt trước đó trong tháng)
-            if (s.salarySubmittedMonth === month) return;
 
             if (cur === 'PT') {
                 // PT: cho phép chốt khi >= 50% khóa
@@ -9664,21 +11089,6 @@ window.saleConfirmStudent = async function (studentId, studentName) {
             } catch (e) { /* skip */ }
         }
 
-        // Lấy tên Sale/người tạo HĐ
-        let saleName = s.creatorName || '';
-        if (!saleName && s.creatorId) {
-            try {
-                const saleDoc = await db.collection('users').doc(s.creatorId).get();
-                if (saleDoc.exists) saleName = saleDoc.data().name || '';
-            } catch (e) { /* skip */ }
-        }
-        if (!saleName && s.saleId) {
-            try {
-                const saleDoc2 = await db.collection('users').doc(s.saleId).get();
-                if (saleDoc2.exists) saleName = saleDoc2.data().name || '';
-            } catch (e) { /* skip */ }
-        }
-
         // Tạo salary_submissions → về Kế Toán
         await db.collection('salary_submissions').add({
             teacherId: s.assignedTeacherId || '',
@@ -9694,8 +11104,7 @@ window.saleConfirmStudent = async function (studentId, studentName) {
                 ageCategory: s.ageCategory || 'Trẻ em',
                 sessions: s.sessions || 0,
                 totalSessions: s.totalSessions || 10,
-                creatorName: saleName,
-                saleName: saleName,
+                creatorName: s.creatorName || '',
                 saleConfirmedBy: currentUserDisplayName || 'Sale'
             }],
             submittedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -9712,12 +11121,9 @@ window.saleConfirmStudent = async function (studentId, studentName) {
 // Sale xem danh sách HV chờ xác nhận chốt lương (chỉ HV mà GV đã bấm chốt)
 window.showPendingSaleConfirm = async function () {
     try {
-        const brId = currentBranchId || currentUserBranchId;
-        if (!brId) return alert('⚠️ Chưa chọn cơ sở!');
-
         // Query HV cơ sở hiện tại, đã được GV chốt lương (có salarySubmittedMonth), chưa saleConfirmed
         const snap = await db.collection('students')
-            .where('branchId', '==', brId)
+            .where('branchId', '==', currentBranchId)
             .get();
 
         const usersSnap = await db.collection('users').get();

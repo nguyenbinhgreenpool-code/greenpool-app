@@ -446,7 +446,7 @@ function renderSaleStats() {
 // updateAllUI đã chuyển sang app-core.js
 
 
-window.saleAssignStudent = async function (name, phone, gender, ageCategory, contractNumber, teacherId, curriculum, ptSessions, isException = false, age = 0, isTestStudent = false, isDiving = false) {
+window.saleAssignStudent = async function (name, phone, gender, ageCategory, contractNumber, teacherId, curriculum, ptSessions, isException = false, age = 0, isTestStudent = false, isDiving = false, skipQueue = false) {
     if (!currentBranchId) return alert("Vui lòng chọn cơ sở gốc!");
     const tList = localState.teachers;
     const tObj = tList.find(x => x.id === teacherId);
@@ -464,36 +464,29 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
             }
         }
 
-        // Kiểm tra trùng họ tên / tuổi / SĐT - phát hiện gói nâng cấp
+        // Kiểm tra trùng SĐT - thông báo gói đã đăng ký
         let isUpgrade = false;
         let upgradeFromId = '';
-        const trimmedName = name.trim().toLowerCase();
-        const existingStudents = await db.collection('students')
-            .where('branchId', '==', currentBranchId)
-            .get();
+        if (phone && phone.length >= 8) {
+            const existingStudents = await db.collection('students')
+                .where('branchId', '==', currentBranchId)
+                .get();
 
-        const duplicates = existingStudents.docs.filter(doc => {
-            const d = doc.data();
-            const existingName = (d.name || '').trim().toLowerCase();
-            if (existingName === trimmedName) return true; // Trùng họ tên
-            if (existingName === trimmedName && d.age && age && d.age === age) return true; // Trùng tên + tuổi
-            if (phone && d.phone && d.phone === phone && phone.length >= 8) return true; // Trùng SĐT
-            return false;
-        });
-
-        if (duplicates.length > 0) {
-            const dupInfo = duplicates.map(doc => {
+            const phoneMatches = existingStudents.docs.filter(doc => {
                 const d = doc.data();
-                return `  • "${d.name}" - ${d.curriculum || 'Bơi Ếch'} (HĐ: ${d.contractNumber || 'N/A'}, Buổi: ${d.sessions}/${d.totalSessions})`;
-            }).join('\n');
+                return d.phone && d.phone === phone;
+            });
 
-            const upgradeConfirm = confirm(
-                `⚡ Phát hiện HV có thể trùng!\n\nHọc viên mới: "${name}" (${curriculum})\n\nĐã có trong hệ thống:\n${dupInfo}\n\n👉 Đây có phải GÓI NÂNG CẤP không?\n\n[OK] = Đúng, gói nâng cấp → Lưu thông tin nâng cấp\n[Cancel] = Không phải, bỏ qua → Tiếp tục bình thường`
-            );
+            if (phoneMatches.length > 0) {
+                const matchInfo = phoneMatches.map((doc, i) => {
+                    const d = doc.data();
+                    return `  ${i + 1}. "${d.name}" — ${d.curriculum || 'Bơi Ếch'} (HĐ: ${d.contractNumber || 'N/A'}, Buổi: ${d.sessions}/${d.totalSessions || 10})`;
+                }).join('\n');
 
-            if (upgradeConfirm) {
+                alert(`📋 SĐT "${phone}" đã đăng ký ${phoneMatches.length} gói:\n\n${matchInfo}\n\n→ HĐ mới "${name}" (${curriculum}) sẽ được tạo bình thường.`);
+
                 isUpgrade = true;
-                upgradeFromId = duplicates[0].id;
+                upgradeFromId = phoneMatches[0].id;
             }
         }
 
@@ -547,24 +540,61 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
         const qDoc = db.collection('queues').doc(currentBranchId);
 
         // LOGIC HÀNG CHỜ MỚI (V4.14) - Sử dụng Skip List (Ghi Nợ Lượt)
+        // skipQueue = true: đang gán nhiều HV trong 1 lượt, chưa phải HV cuối → không advance queue
+        if (skipQueue) {
+            console.log(`⏭️ [HĐ] skipQueue=true: Gán HV "${name}" cho GV "${tObj?.name}" mà KHÔNG advance queue`);
+            logQueueAction({
+                action: 'contract_batch',
+                teacherId: teacherId,
+                teacherName: tObj?.name || '',
+                studentName: name,
+                contractNumber: contractNumber || '',
+                detail: `Gán HV "${name}" (${curriculum || 'Bơi Ếch'}) cho GV "${tObj?.name}" — cùng lượt, chưa chuyển turn`
+            });
+            // Gửi thông báo cho GV
+            sendNotification(teacherId, 'contract', `📝 ${currentUserDisplayName || 'Sale'} vừa gán học viên "${name}" cho bạn (HĐ: ${contractNumber || 'Chưa có'}, ${curriculum || 'Bơi Ếch'}).`);
+            return; // Không advance queue
+        }
         if (!isException) {
             // Xác nhận bình thường → Di chuyển currentIndex đến GV tiếp theo
-            let _logFromIdx = 0, _logToIdx = 0, _logDebt = {};
+            let _logFromIdx = 0, _logToIdx = 0, _logDebt = {}, _logSkipped = [], _logReceiverSlotNum = 0, _logRoundNumber = 0;
             await db.runTransaction(async (transaction) => {
                 const doc = await transaction.get(qDoc);
                 if (doc.exists) {
                     let fo = doc.data().fixedOrder || doc.data().turns || [];
                     let ci = doc.data().currentIndex || 0;
                     let dm = doc.data().debtMap || {};
+                    let sns = doc.data().fixedSlotNumbers || [];
+                    let roundNum = doc.data().roundNumber || 1;
+                    let slotsUsed = doc.data().slotsUsedInRound || 0;
                     _logFromIdx = ci;
                     if (fo.length > 0) {
-                        const result = getNextActiveIndex(fo, ci, dm, localState.teachers);
+                        const result = getNextActiveIndex(fo, ci, dm, localState.teachers, sns);
                         _logToIdx = result.nextIndex;
                         _logDebt = result.updatedDebt;
+                        _logSkipped = result.skippedSlots || [];
+                        _logReceiverSlotNum = sns[result.receiverIndex] || (result.receiverIndex + 1);
+
+                        // Tính số slot active
+                        const activeCount = fo.filter((id, idx) => {
+                            const t = localState.teachers.find(tt => tt.id === id);
+                            return t && !t.queuePaused;
+                        }).length;
+
+                        // Cập nhật vòng: 1 (receiver) + skipped slots
+                        slotsUsed += 1 + _logSkipped.length;
+                        if (activeCount > 0 && slotsUsed >= activeCount) {
+                            roundNum++;
+                            slotsUsed = slotsUsed - activeCount; // carry over
+                        }
+                        _logRoundNumber = roundNum;
+
                         transaction.update(qDoc, {
                             fixedOrder: fo,
                             currentIndex: result.nextIndex,
-                            debtMap: result.updatedDebt
+                            debtMap: result.updatedDebt,
+                            roundNumber: roundNum,
+                            slotsUsedInRound: slotsUsed
                         });
                     }
                 }
@@ -579,7 +609,10 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
                 studentName: name,
                 contractNumber: contractNumber || '',
                 detail: `Gán HĐ "${contractNumber || 'N/A'}" cho GV "${tObj?.name}" | HV "${name}" (${curriculum || 'Bơi Ếch'})`,
-                debtSnapshot: _logDebt
+                debtSnapshot: _logDebt,
+                skippedSlots: _logSkipped,
+                slotNumber: _logReceiverSlotNum,
+                roundNumber: _logRoundNumber
             });
             alert('Đã gán Học viên thành công! Con trỏ đã chuyển sang Giáo viên tiếp theo.');
             console.log('✅ [HĐ] Queue updated + alert shown. Sending notifications...');
@@ -609,13 +642,15 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
                 });
             } catch (e) { console.error('Admin notify error:', e); }
         } else {
-            // Ngoại Lệ → Thêm debt cho SLOT CỤ THỂ của GV được nhận ngoại lệ. currentIndex GIỮ NGUYÊN.
+            let _exSlotNum = 0, _exRoundNum = 0;
             await db.runTransaction(async (transaction) => {
                 const doc = await transaction.get(qDoc);
                 if (doc.exists) {
                     let dm = doc.data().debtMap || {};
                     let fo = doc.data().fixedOrder || [];
                     let ci = doc.data().currentIndex || 0;
+                    let sns = doc.data().fixedSlotNumbers || [];
+                    _exRoundNum = doc.data().roundNumber || 1;
                     // Tìm slot INDEX gần nhất PHÍA TRƯỚC của GV này
                     let targetSlotIdx = -1;
                     for (let i = 0; i < fo.length; i++) {
@@ -626,6 +661,7 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
                         }
                     }
                     if (targetSlotIdx === -1) targetSlotIdx = fo.indexOf(teacherId);
+                    _exSlotNum = sns[targetSlotIdx] || (targetSlotIdx + 1);
                     const slotKey = 's' + targetSlotIdx;
                     dm[slotKey] = (dm[slotKey] || 0) + 1;
                     transaction.update(qDoc, { debtMap: dm });
@@ -638,7 +674,9 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
                 teacherName: tObj?.name || '',
                 studentName: name,
                 contractNumber: contractNumber || '',
-                detail: `HĐ ngoại lệ "${contractNumber || 'N/A'}" cho GV "${tObj?.name}" | HV "${name}" (${curriculum || 'Bơi Ếch'}). GV bị ghi nợ 1 lượt.`
+                detail: `HĐ ngoại lệ "${contractNumber || 'N/A'}" cho GV "${tObj?.name}" | HV "${name}" (${curriculum || 'Bơi Ếch'}). GV bị ghi nợ 1 lượt.`,
+                slotNumber: _exSlotNum,
+                roundNumber: _exRoundNum
             });
             alert('Đã gán HĐ NGOẠI LỆ thành công! Giáo viên nhận HĐ đã bị ghi nợ 1 vòng. Giáo viên Top 1 giữ nguyên vị trí.');
             // Gửi thông báo cho GV
@@ -661,91 +699,16 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
     }
 }
 
-// Xem chi tiết trạng thái Queue (Admin)
-window.showQueueDebug = async function () {
-    if (!currentBranchId) return alert('Chưa chọn cơ sở!');
-    const brName = FIXED_BRANCHES.find(b => b.id === currentBranchId)?.name || currentBranchId;
-    
-    try {
-        const qDoc = await db.collection('queues').doc(currentBranchId).get();
-        if (!qDoc.exists) return alert('Không có dữ liệu queue!');
-        const data = qDoc.data();
-        const fo = data.fixedOrder || [];
-        const ci = data.currentIndex || 0;
-        const dm = data.debtMap || {};
-        const slotNums = data.fixedSlotNumbers || {};
-        const testMap = data.testingMap || {};
 
-        let msg = `📊 TRẠNG THÁI HÀNG ĐỢI — ${brName}\n`;
-        msg += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-        msg += `Con trỏ (currentIndex): ${ci}\n`;
-        msg += `Tổng slot: ${fo.length}\n\n`;
-        msg += `THỨ TỰ GV (từ currentIndex):\n`;
 
-        for (let i = 0; i < fo.length; i++) {
-            const realIdx = (ci + i) % fo.length;
-            const tid = fo[realIdx];
-            const teacher = localState.teachers.find(t => t.id === tid);
-            const name = teacher ? teacher.name : '(không tìm thấy)';
-            const paused = teacher?.queuePaused ? ' ⏸️PAUSED' : '';
-            const sk = 's' + realIdx;
-            const debt = dm[sk] || 0;
-            const debtStr = debt > 0 ? ` 🔴 Nợ ${debt} vòng` : '';
-            const isTest = testMap[tid] ? ' 🧪 Test' : '';
-            const marker = i === 0 ? ' ← TOP 1' : '';
-            const sn = slotNums[realIdx] || (realIdx + 1);
-            msg += `  ${i + 1}. #${sn} ${name}${paused}${debtStr}${isTest}${marker}\n`;
-        }
 
-        // Lịch sử phạt 7 ngày gần đây
-        const weekAgo = new Date();
-        weekAgo.setDate(weekAgo.getDate() - 7);
-        const penSnap = await db.collection('penalties')
-            .where('branchId', '==', currentBranchId)
-            .get();
-        const recentPenalties = penSnap.docs
-            .map(d => d.data())
-            .filter(p => {
-                const ts = p.createdAt?.toDate?.();
-                return ts && ts >= weekAgo;
-            })
-            .sort((a, b) => (b.createdAt?.toDate?.()?.getTime() || 0) - (a.createdAt?.toDate?.()?.getTime() || 0));
-
-        if (recentPenalties.length > 0) {
-            msg += `\n━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-            msg += `📋 PHẠT MẤT LƯỢT (7 ngày gần):\n`;
-            recentPenalties.forEach(p => {
-                const time = p.createdAt?.toDate?.()?.toLocaleString('vi-VN') || '—';
-                msg += `  • ${p.teacherName || '?'} — bởi ${p.saleName || '?'} — "${p.reason || '?'}" (${time})\n`;
-            });
-        }
-
-        // debtMap chi tiết
-        const debtKeys = Object.keys(dm).filter(k => dm[k] > 0);
-        if (debtKeys.length > 0) {
-            msg += `\n━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-            msg += `🔴 CHI TIẾT NỢ (debtMap):\n`;
-            debtKeys.forEach(k => {
-                const slotIdx = parseInt(k.replace('s', ''));
-                const tid = fo[slotIdx];
-                const teacher = localState.teachers.find(t => t.id === tid);
-                msg += `  • Slot ${slotIdx} (${teacher?.name || '?'}): nợ ${dm[k]} vòng\n`;
-            });
-        }
-
-        alert(msg);
-    } catch (e) {
-        alert('Lỗi: ' + e.message);
-    }
-};
-
-// Xem lịch sử chuyển turn (Admin/Manager)
+// Xem lịch sử chuyển turn (Admin/Manager) — Hiển thị theo VÒNG
 window.showQueueHistory = async function () {
     if (!currentBranchId) return alert('Chưa chọn cơ sở!');
     const brName = FIXED_BRANCHES.find(b => b.id === currentBranchId)?.name || currentBranchId;
 
     try {
-        const maxShow = Math.max((localState.fixedOrder?.length || 10) * 2 + 10, 30);
+        const maxShow = Math.max((localState.fixedOrder?.length || 10) * 5 + 10, 60);
         const snap = await db.collection('queue_logs')
             .where('branchId', '==', currentBranchId)
             .orderBy('createdAt', 'desc')
@@ -757,87 +720,160 @@ window.showQueueHistory = async function () {
             return;
         }
 
-        // Render modal overlay
-        const actionLabel = {
-            'contract': '📝 Gán HĐ',
-            'contract_exception': '✨ HĐ Ngoại lệ',
-            'penalty': '⚠️ Phạt lượt',
-            'cut_turn': '✂️ Cắt lượt',
-            'rewind': '⬆️ Đẩy lên Top',
-            'push_teacher': '➕ Thêm GV',
-            'change_type': '🔄 Đổi loại GV'
-        };
-        const actionColor = {
-            'contract': '#3b82f6',
-            'contract_exception': '#f59e0b',
-            'penalty': '#ef4444',
-            'cut_turn': '#8b5cf6',
-            'rewind': '#10b981',
-            'push_teacher': '#06b6d4',
-            'change_type': '#ec4899'
-        };
-
-        let rows = '';
-        snap.docs.forEach((doc, i) => {
+        // Group by roundNumber
+        const rounds = {};
+        const oldLogs = [];
+        snap.docs.forEach(doc => {
             const d = doc.data();
-            const time = d.createdAt?.toDate?.()?.toLocaleString('vi-VN') || '—';
-            const label = actionLabel[d.action] || d.action;
-            const color = actionColor[d.action] || '#888';
-            const fromTo = (d.fromIndex !== null && d.toIndex !== null) ? `Index: ${d.fromIndex} → ${d.toIndex}` : '';
-            rows += `
-                <tr style="border-bottom:1px solid var(--border-color);">
-                    <td style="padding:10px 12px; font-size:12px; color:var(--text-muted); white-space:nowrap;">${time}</td>
-                    <td style="padding:10px 12px;">
-                        <span style="display:inline-block; padding:3px 10px; border-radius:6px; font-size:11px; font-weight:600; background:${color}18; color:${color}; border:1px solid ${color}40;">${label}</span>
-                    </td>
-                    <td style="padding:10px 12px; font-size:13px; color:var(--text-color);">${d.detail || '—'}</td>
-                    <td style="padding:10px 12px; font-size:12px; color:var(--text-muted);">${fromTo}</td>
-                    <td style="padding:10px 12px; font-size:12px; color:var(--text-muted);">${d.performedByName || '—'}</td>
-                </tr>`;
+            d._id = doc.id;
+            if (d.roundNumber && d.roundNumber > 0) {
+                if (!rounds[d.roundNumber]) rounds[d.roundNumber] = [];
+                rounds[d.roundNumber].push(d);
+            } else {
+                oldLogs.push(d);
+            }
         });
 
-        // Tạo modal
+        const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => b - a);
+        const qDoc = await db.collection('queues').doc(currentBranchId).get();
+        const currentRound = qDoc.exists ? (qDoc.data().roundNumber || 1) : 1;
+
+        let content = '';
+
+        roundKeys.forEach(rn => {
+            const entries = rounds[rn];
+            entries.sort((a, b) => {
+                const tA = a.createdAt?.toDate?.()?.getTime() || 0;
+                const tB = b.createdAt?.toDate?.()?.getTime() || 0;
+                return tA - tB;
+            });
+
+            const isCurrent = rn === currentRound;
+            const roundLabel = isCurrent ? `🔄 Vòng Turn ${String(rn).padStart(2, '0')} (đang diễn ra)` : `✅ Vòng Turn ${String(rn).padStart(2, '0')}`;
+            const headerBg = isCurrent ? 'linear-gradient(135deg, rgba(37,99,235,0.15), rgba(6,182,212,0.1))' : 'rgba(255,255,255,0.03)';
+            const headerBorder = isCurrent ? 'var(--primary)' : 'var(--border-color)';
+
+            content += '<div style="margin-bottom:16px; border:1px solid ' + headerBorder + '; border-radius:12px; overflow:hidden;">';
+            content += '<div style="padding:12px 16px; background:' + headerBg + '; border-bottom:1px solid var(--border-color);"><span style="font-weight:700; font-size:14px; color:var(--text-color);">' + roundLabel + '</span></div>';
+            content += '<div style="padding:8px 0;">';
+
+            // Đánh STT thứ tự trong vòng: gom tất cả dòng (skipped + main) theo trình tự thời gian
+            let orderInRound = 0;
+
+            entries.forEach(d => {
+                const time = d.createdAt?.toDate?.()?.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) || '';
+                const date = d.createdAt?.toDate?.()?.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }) || '';
+
+                // Render skipped slots TRƯỚC entry chính (mỗi skip = 1 STT)
+                const skipped = d.skippedSlots || [];
+                skipped.forEach(sk => {
+                    orderInRound++;
+                    let skipReason = '';
+                    let skipIcon = '⏭️';
+                    if (sk.reason === 'debt') {
+                        skipReason = `qua lượt vì bị trừ nợ 1 lượt (nợ còn ${sk.debtAfter || 0})`;
+                        skipIcon = '💳';
+                    } else if (sk.reason === 'paused') {
+                        skipReason = 'qua lượt vì đang tạm dừng';
+                        skipIcon = '⏸️';
+                    } else {
+                        skipReason = 'qua lượt';
+                    }
+                    content += '<div style="padding:7px 16px; display:flex; align-items:center; gap:8px; border-bottom:1px solid rgba(255,255,255,0.03); flex-wrap:wrap;">'
+                        + '<span style="font-size:11px; color:var(--text-muted); min-width:70px;">' + date + ' ' + time + '</span>'
+                        + '<span style="background:rgba(107,114,128,0.15); color:#9ca3af; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; min-width:32px; text-align:center;">TT ' + orderInRound + '</span>'
+                        + '<span style="background:rgba(239,68,68,0.1); color:#ef4444; font-size:11px; font-weight:600; padding:2px 8px; border-radius:4px;">#' + (sk.slotNumber || '?') + '</span>'
+                        + '<span style="font-size:12px; color:#ef4444; font-weight:600;">' + skipIcon + ' ' + (sk.teacherName || '?') + '</span>'
+                        + '<span style="font-size:12px; color:var(--text-muted);">→ ' + skipReason + '</span>'
+                        + '</div>';
+                });
+
+                // Entry chính (GV nhận HĐ / bị phạt / etc)
+                orderInRound++;
+                const sn = d.slotNumber || '?';
+                let color = '#3b82f6', actionIcon = '📝', actionText = '';
+                if (d.action === 'contract') {
+                    color = '#3b82f6';
+                    actionIcon = '📝';
+                    actionText = 'qua lượt vì nhận HĐ mới "' + (d.contractNumber || '') + '" — HV "' + (d.studentName || '?') + '"';
+                } else if (d.action === 'contract_batch') {
+                    color = '#06b6d4';
+                    actionIcon = '📦';
+                    actionText = 'nhận HĐ cùng lượt "' + (d.contractNumber || '') + '" — HV "' + (d.studentName || '?') + '" (chưa chuyển turn)';
+                    orderInRound--; // Không tính STT cho batch (cùng lượt)
+                } else if (d.action === 'contract_exception') {
+                    color = '#f59e0b';
+                    actionIcon = '✨';
+                    actionText = 'nhận HĐ ngoại lệ "' + (d.contractNumber || '') + '" — HV "' + (d.studentName || '?') + '" → ghi nợ 1 lượt';
+                } else if (d.action === 'cut_turn') {
+                    color = '#8b5cf6';
+                    actionIcon = '✂️';
+                    actionText = 'bị cắt lượt bởi ' + (d.performedByName || 'Admin');
+                } else if (d.action === 'penalty') {
+                    color = '#ef4444';
+                    actionIcon = '⚠️';
+                    actionText = 'bị phạt mất lượt';
+                } else if (d.action === 'rewind') {
+                    color = '#10b981';
+                    actionIcon = '⏪';
+                    actionText = 'được đẩy lên Top 1';
+                } else {
+                    actionText = d.detail || d.action;
+                }
+
+                const orderLabel = d.action === 'contract_batch' ? '—' : ('TT ' + orderInRound);
+                const orderBg = d.action === 'contract_batch' ? 'rgba(6,182,212,0.1)' : 'rgba(107,114,128,0.15)';
+
+                content += '<div style="padding:8px 16px; display:flex; align-items:center; gap:8px; border-bottom:1px solid rgba(255,255,255,0.03); flex-wrap:wrap;">'
+                    + '<span style="font-size:11px; color:var(--text-muted); min-width:70px;">' + date + ' ' + time + '</span>'
+                    + '<span style="background:' + orderBg + '; color:#9ca3af; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; min-width:32px; text-align:center;">' + orderLabel + '</span>'
+                    + '<span style="background:' + color + '18; color:' + color + '; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; min-width:24px; text-align:center;">#' + sn + '</span>'
+                    + '<span style="font-size:13px; font-weight:600; color:' + color + ';">' + actionIcon + ' ' + (d.teacherName || '?') + '</span>'
+                    + '<span style="font-size:12px; color:var(--text-color);">→ ' + actionText + '</span>'
+                    + '</div>';
+            });
+
+            content += '</div></div>';
+        });
+
+        // Log cũ (không có roundNumber)
+        if (oldLogs.length > 0) {
+            content += '<div style="margin-bottom:16px; border:1px solid var(--border-color); border-radius:12px; overflow:hidden; opacity:0.6;">';
+            content += '<div style="padding:12px 16px; background:rgba(255,255,255,0.03); border-bottom:1px solid var(--border-color);"><span style="font-weight:700; font-size:14px; color:var(--text-muted);">📁 Lịch sử cũ (trước khi cập nhật)</span></div>';
+            content += '<div style="padding:8px 0;">';
+            oldLogs.forEach(d => {
+                const time = d.createdAt?.toDate?.()?.toLocaleString('vi-VN') || '—';
+                content += '<div style="padding:6px 16px; font-size:12px; color:var(--text-muted); border-bottom:1px solid rgba(255,255,255,0.03);">' + time + ' — ' + (d.detail || d.action || '—') + '</div>';
+            });
+            content += '</div></div>';
+        }
+
         let modal = document.getElementById('queue-history-modal');
         if (!modal) {
             modal = document.createElement('div');
             modal.id = 'queue-history-modal';
             document.body.appendChild(modal);
         }
-        modal.innerHTML = `
-            <div style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:99999; display:flex; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target===this) this.remove();">
-                <div style="background:var(--card-bg); border-radius:16px; max-width:900px; width:100%; max-height:85vh; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.4); display:flex; flex-direction:column;">
-                    <div style="padding:16px 20px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
-                        <div>
-                            <h3 style="margin:0; font-size:16px; color:var(--text-color);">📋 Lịch sử Turn — ${brName}</h3>
-                            <p style="margin:4px 0 0; font-size:12px; color:var(--text-muted);">${snap.size} bản ghi gần nhất</p>
-                        </div>
-                        <button onclick="document.getElementById('queue-history-modal').remove()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-muted); padding:4px 8px;">✕</button>
-                    </div>
-                    <div style="overflow-y:auto; flex:1;">
-                        <table style="width:100%; border-collapse:collapse; min-width:700px;">
-                            <thead>
-                                <tr style="background:var(--bg-color); position:sticky; top:0;">
-                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Thời gian</th>
-                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Loại</th>
-                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Chi tiết</th>
-                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Index</th>
-                                    <th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Người thực hiện</th>
-                                </tr>
-                            </thead>
-                            <tbody>${rows}</tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>`;
+        modal.innerHTML = '<div style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:99999; display:flex; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target===this) this.remove();">'
+            + '<div style="background:var(--card-bg); border-radius:16px; max-width:800px; width:100%; max-height:85vh; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.4); display:flex; flex-direction:column;">'
+            + '<div style="padding:16px 20px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">'
+            + '<div><h3 style="margin:0; font-size:16px; color:var(--text-color);">📋 Lịch sử Turn — ' + brName + '</h3>'
+            + '<p style="margin:4px 0 0; font-size:12px; color:var(--text-muted);">Vòng hiện tại: ' + currentRound + ' | ' + snap.size + ' bản ghi</p></div>'
+            + '<button onclick="document.getElementById(\'queue-history-modal\').remove()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-muted); padding:4px 8px;">✕</button>'
+            + '</div>'
+            + '<div style="overflow-y:auto; flex:1; padding:16px;">' + (content || '<div style="text-align:center; padding:30px; color:var(--text-muted);">Không có dữ liệu</div>') + '</div>'
+            + '</div></div>';
     } catch (e) {
-        // Có thể cần composite index
         if (e.message?.includes('index')) {
-            alert('⚠️ Cần tạo Firestore Index cho queue_logs.\\n\\nVui lòng mở Console Firebase → Firestore → Indexes → Tạo index:\\nCollection: queue_logs\\nFields: branchId ASC, createdAt DESC');
+            alert('⚠️ Cần tạo Firestore Index cho queue_logs.\n\nCollection: queue_logs\nFields: branchId ASC, createdAt DESC');
         } else {
             alert('Lỗi: ' + e.message);
         }
     }
 };
+
+
+
 
 // Admin: Đẩy GV cuối hàng lên Top 1 (hoàn tác cắt lượt nhầm)
 window.rewindQueueToLast = async function () {
@@ -886,7 +922,7 @@ window.cutQueueTurn = async function (unused, skipConfirm = false) {
     if (!skipConfirm && !confirm('Bạn muốn cắt lượt GV hiện tại và chuyển sang GV tiếp theo?')) return;
 
     const qDoc = db.collection('queues').doc(currentBranchId);
-    let _cutFrom = 0, _cutTo = 0, _cutTeacherId = '', _cutTeacherName = '';
+    let _cutFrom = 0, _cutTo = 0, _cutTeacherId = '', _cutTeacherName = '', _cutSlotNum = 0, _cutRound = 0, _cutSkipped = [];
     try {
         await db.runTransaction(async (transaction) => {
             const doc = await transaction.get(qDoc);
@@ -894,17 +930,37 @@ window.cutQueueTurn = async function (unused, skipConfirm = false) {
                 let fo = doc.data().fixedOrder || [];
                 let ci = doc.data().currentIndex || 0;
                 let dm = doc.data().debtMap || {};
+                let sns = doc.data().fixedSlotNumbers || [];
+                let roundNum = doc.data().roundNumber || 1;
+                let slotsUsed = doc.data().slotsUsedInRound || 0;
                 _cutFrom = ci;
                 _cutTeacherId = fo[ci] || '';
                 const teacher = localState.teachers.find(t => t.id === _cutTeacherId);
                 _cutTeacherName = teacher?.name || '';
+                _cutSlotNum = sns[ci] || (ci + 1);
+                _cutRound = roundNum;
                 if (fo.length > 0) {
-                    const result = getNextActiveIndex(fo, ci, dm, localState.teachers);
+                    const result = getNextActiveIndex(fo, ci, dm, localState.teachers, sns);
                     _cutTo = result.nextIndex;
+                    _cutSkipped = result.skippedSlots || [];
+
+                    const activeCount = fo.filter(id => {
+                        const t = localState.teachers.find(tt => tt.id === id);
+                        return t && !t.queuePaused;
+                    }).length;
+                    slotsUsed += 1 + _cutSkipped.length;
+                    if (activeCount > 0 && slotsUsed >= activeCount) {
+                        roundNum++;
+                        slotsUsed = slotsUsed - activeCount;
+                    }
+                    _cutRound = roundNum;
+
                     transaction.update(qDoc, {
                         fixedOrder: fo,
                         currentIndex: result.nextIndex,
-                        debtMap: result.updatedDebt
+                        debtMap: result.updatedDebt,
+                        roundNumber: roundNum,
+                        slotsUsedInRound: slotsUsed
                     });
                 }
             }
@@ -917,7 +973,10 @@ window.cutQueueTurn = async function (unused, skipConfirm = false) {
                 toIndex: _cutTo,
                 teacherId: _cutTeacherId,
                 teacherName: _cutTeacherName,
-                detail: `Admin cắt lượt GV "${_cutTeacherName}"`
+                detail: `Admin cắt lượt GV "${_cutTeacherName}"`,
+                slotNumber: _cutSlotNum,
+                roundNumber: _cutRound,
+                skippedSlots: _cutSkipped
             });
         }
     } catch (e) { console.error(e); }
@@ -964,6 +1023,20 @@ window.saleSkipTurn = async function () {
             teacherName: penalizedTeacherName,
             detail: `Phạt mất lượt GV "${penalizedTeacherName}". Lý do: "${trimmedReason}"`
         });
+
+        // Gửi thông báo cho Quản lý cơ sở
+        try {
+            const mgrSnap = await db.collection('users').where('role', '==', 'MANAGER').where('branchId', '==', currentBranchId).get();
+            mgrSnap.forEach(doc => sendNotification(doc.id, 'penalty', `⚠️ Sale "${currentUserDisplayName || 'Sale'}" đã PHẠT MẤT LƯỢT GV "${penalizedTeacherName}". Lý do: "${trimmedReason}" — CS: ${FIXED_BRANCHES.find(b => b.id === currentBranchId)?.name || ''}`));
+        } catch (e) { console.error('Manager notify error:', e); }
+
+        // Gửi thông báo cho Admin
+        try {
+            const adminSnap = await db.collection('users').where('role', '==', 'ADMIN').get();
+            adminSnap.forEach(doc => {
+                if (doc.id !== currentUserId) sendNotification(doc.id, 'penalty', `⚠️ Sale "${currentUserDisplayName || 'Sale'}" đã PHẠT MẤT LƯỢT GV "${penalizedTeacherName}". Lý do: "${trimmedReason}" — CS: ${FIXED_BRANCHES.find(b => b.id === currentBranchId)?.name || ''}`);
+            });
+        } catch (e) { console.error('Admin notify error:', e); }
 
         alert('Phạt mất lượt thành công! Con trỏ đã chuyển sang GV tiếp theo.');
     } catch (e) {
@@ -1066,6 +1139,21 @@ window.saleConfirmStudent = async function (studentId, studentName) {
             } catch (e) { /* skip */ }
         }
 
+        // Lấy tên Sale/người tạo HĐ
+        let saleName = s.creatorName || '';
+        if (!saleName && s.creatorId) {
+            try {
+                const saleDoc = await db.collection('users').doc(s.creatorId).get();
+                if (saleDoc.exists) saleName = saleDoc.data().name || '';
+            } catch (e) { /* skip */ }
+        }
+        if (!saleName && s.saleId) {
+            try {
+                const saleDoc2 = await db.collection('users').doc(s.saleId).get();
+                if (saleDoc2.exists) saleName = saleDoc2.data().name || '';
+            } catch (e) { /* skip */ }
+        }
+
         // Tạo salary_submissions → về Kế Toán
         await db.collection('salary_submissions').add({
             teacherId: s.assignedTeacherId || '',
@@ -1081,7 +1169,8 @@ window.saleConfirmStudent = async function (studentId, studentName) {
                 ageCategory: s.ageCategory || 'Trẻ em',
                 sessions: s.sessions || 0,
                 totalSessions: s.totalSessions || 10,
-                creatorName: s.creatorName || '',
+                creatorName: saleName,
+                saleName: saleName,
                 saleConfirmedBy: currentUserDisplayName || 'Sale'
             }],
             submittedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -1098,9 +1187,12 @@ window.saleConfirmStudent = async function (studentId, studentName) {
 // Sale xem danh sách HV chờ xác nhận chốt lương (chỉ HV mà GV đã bấm chốt)
 window.showPendingSaleConfirm = async function () {
     try {
+        const brId = currentBranchId || currentUserBranchId;
+        if (!brId) return alert('⚠️ Chưa chọn cơ sở!');
+
         // Query HV cơ sở hiện tại, đã được GV chốt lương (có salarySubmittedMonth), chưa saleConfirmed
         const snap = await db.collection('students')
-            .where('branchId', '==', currentBranchId)
+            .where('branchId', '==', brId)
             .get();
 
         const usersSnap = await db.collection('users').get();

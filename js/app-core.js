@@ -133,13 +133,17 @@ const GOOGLE_CLB_SHEET_URL = 'https://script.google.com/macros/s/AKfycbyg85vttXl
 async function syncToGoogleSheet(data) {
     if (!GOOGLE_SHEET_WEBAPP_URL) return;
     try {
-        fetch(GOOGLE_SHEET_WEBAPP_URL, {
+        console.log('📊 Sheet sync: sending data...', data.action, data.name || data.contractNumber || '');
+        await fetch(GOOGLE_SHEET_WEBAPP_URL, {
             method: 'POST',
             mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain' },
             body: JSON.stringify(data)
         });
-    } catch (e) { console.warn('Sheet sync error:', e); }
+        console.log('✅ Sheet sync: sent OK (no-cors, no response check)');
+    } catch (e) {
+        console.error('❌ Sheet sync error:', e);
+    }
 }
 
 // Auto sync 1 dòng VĐV CLB lên Google Sheet
@@ -168,8 +172,22 @@ window.stopSyncSheet = function () {
 
 window.syncAllStudentsToSheet = async function () {
     if (!GOOGLE_SHEET_WEBAPP_URL) return alert('Chưa cấu hình Google Sheet URL!');
-    if (_isSyncing) return alert('⏳ Đang đồng bộ, vui lòng chờ...\n\nBấm nút ⏹️ Dừng đồng bộ để huỷ.');
-    if (!confirm('📊 Đồng bộ học viên lên Google Sheet?\n\nMỗi cơ sở = 1 tab riêng.\n⚠️ Dữ liệu cũ sẽ được XOÁ rồi ghi lại từ đầu.')) return;
+    if (_isSyncing) return alert('⏳ Đang đồng bộ, vui lòng chờ...\n\nBấm nút Dừng đồng bộ để huỷ.');
+
+    // Cho chọn cơ sở
+    let branchOptions = '0. TẤT CẢ cơ sở\n';
+    FIXED_BRANCHES.forEach((b, i) => { branchOptions += `${i + 1}. ${b.name}\n`; });
+    const choice = prompt(`📊 ĐỒNG BỘ HỌC VIÊN LÊN SHEET\n\nChọn cơ sở để đồng bộ (nhập số):\n${branchOptions}\n⚠️ Dữ liệu cũ của CS được chọn sẽ XOÁ rồi ghi lại.`);
+    if (choice === null) return;
+    const choiceNum = parseInt(choice);
+    if (isNaN(choiceNum) || choiceNum < 0 || choiceNum > FIXED_BRANCHES.length) {
+        return alert('Lựa chọn không hợp lệ!');
+    }
+    const selectedBranch = choiceNum === 0 ? null : FIXED_BRANCHES[choiceNum - 1];
+    const confirmMsg = selectedBranch
+        ? `Đồng bộ HV cơ sở "${selectedBranch.name}"?\n⚠️ Tab "${selectedBranch.name}" trên Sheet sẽ bị xoá và ghi lại.`
+        : 'Đồng bộ TẤT CẢ cơ sở?\n⚠️ Tất cả tab HV trên Sheet sẽ bị xoá và ghi lại.';
+    if (!confirm(confirmMsg)) return;
 
     _isSyncing = true;
     _syncAbort = false;
@@ -186,6 +204,8 @@ window.syncAllStudentsToSheet = async function () {
             const s = doc.data();
             const branch = FIXED_BRANCHES.find(b => b.id === s.branchId);
             const branchName = branch?.name || 'Khác';
+            // Nếu chọn 1 CS cụ thể → chỉ lấy HV của CS đó
+            if (selectedBranch && branchName !== selectedBranch.name) return;
             if (!branchStudents[branchName]) branchStudents[branchName] = [];
             const teacher = usersMap[s.assignedTeacherId];
             const creator = usersMap[s.creatorId];
@@ -214,6 +234,7 @@ window.syncAllStudentsToSheet = async function () {
             if (students.length === 0) continue;
             if (_syncAbort) { alert('⏹️ Đã dừng đồng bộ!'); break; }
 
+            console.log(`🔄 Đang xoá tab ${branchName}...`);
             await fetch(GOOGLE_SHEET_WEBAPP_URL, {
                 method: 'POST', mode: 'no-cors',
                 headers: { 'Content-Type': 'text/plain' },
@@ -243,7 +264,7 @@ window.syncAllStudentsToSheet = async function () {
             totalCount += students.length;
         }
 
-        if (!_syncAbort) alert(`✅ Đã đồng bộ ${totalCount} học viên lên Google Sheet!`);
+        if (!_syncAbort) alert(`✅ Đã đồng bộ ${totalCount} học viên${selectedBranch ? ' (' + selectedBranch.name + ')' : ''} lên Google Sheet!`);
     } catch (e) {
         alert('Lỗi đồng bộ: ' + e.message);
     } finally {
@@ -263,7 +284,17 @@ window.stopAttSync = function () {
 window.syncAttendanceToSheet = async function () {
     if (!GOOGLE_SHEET_WEBAPP_URL) return alert('Chưa cấu hình Google Sheet URL!');
     if (_isAttSyncing) return alert('⏳ Đang đồng bộ, vui lòng chờ...');
-    if (!confirm('📋 Đồng bộ lịch sử điểm danh lên Google Sheet?\n\n• Mỗi HV = 1 dòng, mỗi buổi = 1 cột\n• Yêu cầu: ĐÃ đồng bộ danh sách HV trước\n• Dữ liệu điểm danh sẽ ghi vào cột Buổi 1, 2, 3...')) return;
+
+    // Cho chọn cơ sở
+    let branchOptions = '0. TẤT CẢ cơ sở\n';
+    FIXED_BRANCHES.forEach((b, i) => { branchOptions += `${i + 1}. ${b.name}\n`; });
+    const choice = prompt(`📋 ĐỒNG BỘ ĐIỂM DANH LÊN SHEET\n\nChọn cơ sở (nhập số):\n${branchOptions}\n• Yêu cầu: ĐÃ đồng bộ danh sách HV trước`);
+    if (choice === null) return;
+    const choiceNum = parseInt(choice);
+    if (isNaN(choiceNum) || choiceNum < 0 || choiceNum > FIXED_BRANCHES.length) {
+        return alert('Lựa chọn không hợp lệ!');
+    }
+    const selectedBranch = choiceNum === 0 ? null : FIXED_BRANCHES[choiceNum - 1];
 
     _isAttSyncing = true;
     _attSyncAbort = false;
@@ -277,9 +308,12 @@ window.syncAttendanceToSheet = async function () {
         studentsSnap.docs.forEach(doc => {
             const s = doc.data();
             const branch = FIXED_BRANCHES.find(b => b.id === s.branchId);
+            const branchName = branch?.name || 'Khác';
+            // Nếu chọn 1 CS → chỉ lấy HV của CS đó
+            if (selectedBranch && branchName !== selectedBranch.name) return;
             studentMap[doc.id] = {
                 contractNumber: s.contractNumber || '',
-                branchName: branch?.name || 'Khác',
+                branchName: branchName,
                 totalSessions: s.totalSessions || 10
             };
         });
@@ -288,7 +322,7 @@ window.syncAttendanceToSheet = async function () {
         const attByStudent = {};
         attSnap.docs.forEach(doc => {
             const a = doc.data();
-            if (!a.studentId) return;
+            if (!a.studentId || !studentMap[a.studentId]) return;
             if (!attByStudent[a.studentId]) attByStudent[a.studentId] = [];
             const ts = a.createdAt?.toDate ? a.createdAt.toDate() : null;
             attByStudent[a.studentId].push({
@@ -352,7 +386,7 @@ window.syncAttendanceToSheet = async function () {
             }
         }
 
-        if (!_attSyncAbort) alert(`✅ Đã đồng bộ điểm danh ${count} học viên lên Google Sheet!`);
+        if (!_attSyncAbort) alert(`✅ Đã đồng bộ điểm danh ${count} học viên${selectedBranch ? ' (' + selectedBranch.name + ')' : ''} lên Google Sheet!`);
     } catch (e) {
         alert('Lỗi đồng bộ điểm danh: ' + e.message);
     } finally {
@@ -1017,10 +1051,12 @@ async function pushTeacherToQueue(teacherId, type, targetBranchId = currentBranc
 
 // Tìm vị trí GV tiếp theo có thể nhận HĐ (bỏ qua paused, debt)
 // Nếu GV có debt > 0: giảm debt 1, skip qua
-function getNextActiveIndex(fixedOrder, currentIdx, debtMap, teachers) {
+function getNextActiveIndex(fixedOrder, currentIdx, debtMap, teachers, slotNumbers) {
     const len = fixedOrder.length;
-    if (len === 0) return { nextIndex: 0, updatedDebt: {} };
+    if (len === 0) return { nextIndex: 0, updatedDebt: {}, skippedSlots: [] };
     const updatedDebt = { ...debtMap };
+    const skippedSlots = [];
+    const sns = slotNumbers || [];
 
     // Bước 1: Tìm slot THỰC SỰ nhận HV (bỏ qua debt + paused từ currentIdx)
     let actualReceiver = currentIdx;
@@ -1028,21 +1064,31 @@ function getNextActiveIndex(fixedOrder, currentIdx, debtMap, teachers) {
         const tid = fixedOrder[actualReceiver];
         const teacher = teachers.find(t => t.id === tid);
         if (!teacher || teacher.queuePaused) {
+            // Paused/không tồn tại → skip, không ghi (vì GV không active)
             actualReceiver = (actualReceiver + 1) % len;
             continue;
         }
         const sk = 's' + actualReceiver;
         if ((updatedDebt[sk] || 0) > 0) {
-            // Slot này có nợ → tiêu nợ, nhảy xuống cuối (skip)
+            const debtBefore = updatedDebt[sk];
             updatedDebt[sk]--;
             if (updatedDebt[sk] <= 0) delete updatedDebt[sk];
+            skippedSlots.push({
+                slotIndex: actualReceiver,
+                teacherId: tid,
+                teacherName: teacher.name || '?',
+                slotNumber: sns[actualReceiver] || (actualReceiver + 1),
+                reason: 'debt',
+                debtBefore: debtBefore,
+                debtAfter: updatedDebt[sk] || 0
+            });
             actualReceiver = (actualReceiver + 1) % len;
             continue;
         }
-        break; // Đây là slot thực sự nhận HV
+        break;
     }
 
-    // Bước 2: Tìm slot TIẾP THEO sau slot nhận (advance)
+    // Bước 2: Tìm slot TIẾP THEO sau slot nhận (KHÔNG tiêu nợ)
     let checked = 0;
     let idx = (actualReceiver + 1) % len;
     while (checked < len) {
@@ -1053,21 +1099,13 @@ function getNextActiveIndex(fixedOrder, currentIdx, debtMap, teachers) {
             checked++;
             continue;
         }
-        const slotKey = 's' + idx;
-        if ((updatedDebt[slotKey] || 0) > 0) {
-            updatedDebt[slotKey]--;
-            if (updatedDebt[slotKey] <= 0) delete updatedDebt[slotKey];
-            idx = (idx + 1) % len;
-            checked++;
-            continue;
-        }
-        return { nextIndex: idx, updatedDebt };
+        return { nextIndex: idx, updatedDebt, skippedSlots, receiverIndex: actualReceiver };
     }
-    return { nextIndex: (actualReceiver + 1) % len, updatedDebt };
+    return { nextIndex: (actualReceiver + 1) % len, updatedDebt, skippedSlots, receiverIndex: actualReceiver };
 }
 
 // ===================== QUEUE ACTION LOG ===================== //
-// Ghi log thay đổi turn — chỉ giữ 2 vòng turn gần nhất
+// Ghi log thay đổi turn — giữ 5 vòng turn gần nhất
 async function logQueueAction(params) {
     const brId = params.branchId || currentBranchId;
     try {
@@ -1084,11 +1122,14 @@ async function logQueueAction(params) {
             performedBy: currentUserId,
             performedByName: currentUserDisplayName || window._currentUserData?.name || 'Hệ thống',
             debtSnapshot: params.debtSnapshot || null,
+            skippedSlots: params.skippedSlots || [],
+            slotNumber: params.slotNumber || 0,
+            roundNumber: params.roundNumber || 0,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // Auto-cleanup: giữ tối đa 2 vòng turn (2 × số slot + 10 buffer)
-        const maxKeep = Math.max((localState.fixedOrder?.length || 10) * 2 + 10, 30);
+        // Auto-cleanup: giữ tối đa 5 vòng turn
+        const maxKeep = Math.max((localState.fixedOrder?.length || 10) * 5 + 10, 60);
         const allLogs = await db.collection('queue_logs')
             .where('branchId', '==', brId)
             .orderBy('createdAt', 'desc')
@@ -1107,8 +1148,9 @@ async function logQueueAction(params) {
 
 // Gửi thông báo cho user
 async function sendNotification(toUserId, type, message) {
+    if (!toUserId) { console.warn('sendNotification: toUserId is empty!'); return; }
     try {
-        await db.collection('notifications').add({
+        const ref = await db.collection('notifications').add({
             toUserId,
             type, // 'contract', 'contract_exception', 'penalty'
             message,
@@ -1118,6 +1160,7 @@ async function sendNotification(toUserId, type, message) {
             read: false,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
+        console.log(`🔔 Notification sent → ${toUserId} (type: ${type}, id: ${ref.id})`);
     } catch (e) {
         console.error('Lỗi gửi thông báo:', e);
     }
@@ -1360,6 +1403,21 @@ function listenToNotifications() {
                 const tB = b.createdAt?.toDate?.()?.getTime() || 0;
                 return tB - tA;
             });
+
+            // Auto-cleanup: xóa notifications đã đọc quá 7 ngày
+            const weekAgo = new Date();
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            const oldRead = notifData.filter(n => {
+                if (!n.read) return false;
+                const t = n.createdAt?.toDate?.();
+                return t && t < weekAgo;
+            });
+            if (oldRead.length > 0) {
+                const batch = db.batch();
+                oldRead.forEach(n => batch.delete(db.collection('notifications').doc(n.id)));
+                batch.commit().then(() => console.log(`🧹 Đã xóa ${oldRead.length} thông báo cũ`)).catch(() => {});
+            }
+
             notifData = notifData.slice(0, 50);
 
             // Push notification cho thông báo MỚI (chưa đọc, chưa hiện)

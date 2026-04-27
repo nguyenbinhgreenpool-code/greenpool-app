@@ -32,7 +32,10 @@ service cloud.firestore {
     match /students/{id} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
-      allow update: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE', 'TEACHER', 'LETAN'];
+      allow update: if isAuthenticated() && (
+        getUserRole() in ['ADMIN', 'MANAGER', 'SALE', 'TEACHER', 'LETAN']
+        || (getUserRole() == 'KHACHHANG' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['waiverSigned', 'waiverSignedAt', 'waiverSignature', 'emergencyContactName', 'emergencyContactPhone', 'dateOfBirth', 'cccd']))
+      );
       allow delete: if isAdmin();
     }
 
@@ -41,7 +44,7 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN'];
       allow update: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN', 'TEACHER'];
-      allow delete: if isAdmin();
+      allow delete: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN'];
     }
 
     // ===== ATHLETES (VĐV CLB) =====
@@ -56,8 +59,8 @@ service cloud.firestore {
     match /clb_attendance/{id} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN'];
-      allow update: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN'];
-      allow delete: if isAdmin();
+      allow update: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN', 'TEACHER'];
+      allow delete: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'LETAN'];
     }
 
     // ===== CLB ATHLETES =====
@@ -78,13 +81,13 @@ service cloud.firestore {
     // ===== QUEUES (Phân lượt GV) =====
     match /queues/{id} {
       allow read: if isAuthenticated() && isStaff();
-      allow write: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER'];
+      allow write: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
     }
 
     // ===== QUEUE LOGS =====
     match /queue_logs/{id} {
       allow read: if isAuthenticated() && isStaff();
-      allow write: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER'];
+      allow write: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
     }
 
     // ===== PENALTIES (Phạt GV) =====
@@ -95,8 +98,8 @@ service cloud.firestore {
 
     // ===== SALARY SUBMISSIONS (Chốt lương) =====
     match /salary_submissions/{id} {
-      allow read: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
-      allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
+      allow read: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE', 'KETOAN', 'VIEWER', 'TEACHER'];
+      allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE', 'KETOAN', 'TEACHER'];
       allow update: if isAdmin();
       allow delete: if isAdmin();
     }

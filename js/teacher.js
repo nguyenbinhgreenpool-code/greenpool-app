@@ -1,9 +1,17 @@
-// ===== GreenPool App — Teacher Module (v7.0) =====
+// ===================== MODULE GIÁO VIÊN ===================== //
+// Tách từ app.js ngày 2026-04-15
+// Functions: renderTeacherStudents, editStudentInfo, transferStudent, 
+//            uploadCompletionVideo, deleteStudent, cleanupExpiredVideos
+// Dependencies: localState, db, currentUserId, currentUserRole, 
+//               currentUserDisplayName, FIXED_BRANCHES, storage,
+//               filterByDate, sendNotification, isDivingCurriculum,
+//               renderDateFilterBar, syncToGoogleSheet
+// ============================================================ //
 
 let teacherSearchQuery = '';
 let teacherFilterMode = 'all';
 
-function renderTeacherStudents() {
+window.renderTeacherStudents = function renderTeacherStudents() {
     const list = document.getElementById('teacher-students-list');
     const statsBox = document.getElementById('teacher-stats-summary');
     let teacherId = document.getElementById('select-teacher-view').value;
@@ -110,6 +118,8 @@ function renderTeacherStudents() {
         filtered = filtered.filter(s => s.source === 'Self');
     } else if (teacherFilterMode === 'test') {
         filtered = filtered.filter(s => s.isTestStudent === true);
+    } else if (teacherFilterMode === 'zero') {
+        filtered = filtered.filter(s => (s.sessions || 0) === 0);
     }
 
     // Lọc theo tên tìm kiếm
@@ -145,7 +155,13 @@ function renderTeacherStudents() {
         const statusDot = isDone ? '🔴' : '🟢';
         const saleName = st.creatorId ? (saleMap[st.creatorId] || 'Sale ẩn') : '';
         const contractNum = st.contractNumber || '';
-        const canConfirmSalary = st.sessions >= 7;
+        // Điều kiện chốt lương: Bơi ≥7 buổi, Dolphin 1 ≥3/4, Dolphin 2 ≥4/5, Lặn khác ≥ tổng-1
+        let canConfirmSalary = st.sessions >= 7;
+        if (isDivingCurriculum(curType)) {
+            if (curType === 'Dolphin 1') canConfirmSalary = st.sessions >= 3;
+            else if (curType === 'Dolphin 2') canConfirmSalary = st.sessions >= 4;
+            else canConfirmSalary = st.sessions >= (total - 1);
+        }
         const isSalaryConfirmed = st.salaryConfirmed || false;
         const saleOk = st.saleConfirmed === true;
         const salaryMonth = st.salarySubmittedMonth || '';
@@ -285,9 +301,9 @@ function renderTeacherStudents() {
         `;
     });
     list.innerHTML = htmlParts;
-}
-
-
+};
+// Bổ sung/sửa thông tin HV
+// Xem lịch sử điểm danh của HV
 window.showAttendanceHistory = async function (studentId, btnEl) {
     const container = document.getElementById('att-history-' + studentId);
     if (!container) return;
@@ -509,12 +525,12 @@ window.editStudentInfo = async function (studentId) {
             }
         }
 
-        // Sync lên Google Sheet (cập nhật thông tin HV)
+        // Auto sync lên Google Sheet (chỉ HV này)
         try {
             const updatedDoc = await db.collection('students').doc(studentId).get();
             const updatedSt = updatedDoc.data();
             const brName = FIXED_BRANCHES.find(b => b.id === (updatedSt.branchId || currentBranchId))?.name || 'Khác';
-            const tObjEdit = localState.teachers.find(t => t.id === updatedSt.assignedTeacherId);
+            const teacherObj = localState.teachers.find(t => t.id === updatedSt.assignedTeacherId);
             const saleMapLocal = {};
             localState.sales.forEach(s => { saleMapLocal[s.id] = s.name; });
             localState.teachers.forEach(t => { if (!saleMapLocal[t.id]) saleMapLocal[t.id] = t.name; });
@@ -528,16 +544,18 @@ window.editStudentInfo = async function (studentId) {
                     contractNumber: updatedSt.contractNumber || '',
                     swimType: updatedSt.curriculum || '',
                     ageGroup: updatedSt.ageCategory || '',
-                    teacherName: tObjEdit?.name || '',
+                    teacherName: teacherObj?.name || '',
                     saleName: saleName,
                     sessions: updatedSt.sessions || 0,
                     branchName: brName,
                     contractDate: createdDate
                 }
             });
-        } catch (sheetErr) { console.warn('Sheet sync on edit error:', sheetErr); }
+        } catch (syncErr) {
+            console.warn('Sync Sheet sau edit:', syncErr);
+        }
 
-        alert('✅ Đã cập nhật thông tin!' + (updates.sessions !== undefined && updates.sessions < (st.sessions || 0) ? `\n📋 Đã xoá ${(st.sessions || 0) - updates.sessions} bản ghi điểm danh gần nhất.` : ''));
+        alert('✅ Đã cập nhật thông tin!' + (updates.sessions !== undefined && updates.sessions < (st.sessions || 0) ? `\n📋 Đã xoá ${(st.sessions || 0) - updates.sessions} bản ghi điểm danh gần nhất.\n📤 Đã sync lên Sheet.` : '\n📤 Đã sync lên Sheet.'));
     } catch (e) {
         alert('Lỗi cập nhật: ' + e.message);
     }
@@ -622,6 +640,27 @@ window.transferStudent = async function (studentId, studentName, currentTeacherI
             transferredAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
+        // Cập nhật TẤT CẢ attendance records sang GV mới
+        let attUpdated = 0;
+        try {
+            const attSnap = await db.collection('attendance')
+                .where('studentId', '==', studentId)
+                .get();
+            if (!attSnap.empty) {
+                const batch = db.batch();
+                attSnap.forEach(doc => {
+                    batch.update(doc.ref, {
+                        teacherId: newTeacher.id,
+                        teacherName: newTeacher.name
+                    });
+                });
+                await batch.commit();
+                attUpdated = attSnap.size;
+            }
+        } catch (attErr) {
+            console.warn('Lỗi cập nhật attendance khi chuyển GV:', attErr);
+        }
+
         // Gửi thông báo cho GV nhận
         await db.collection('notifications').add({
             toUserId: newTeacher.id,
@@ -631,7 +670,34 @@ window.transferStudent = async function (studentId, studentName, currentTeacherI
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        alert(`✅ Đã chuyển nhượng "${studentName}" cho ${newTeacher.name} thành công!`);
+        // Sync lên Google Sheet (cập nhật GV mới)
+        try {
+            const updatedDoc = await db.collection('students').doc(studentId).get();
+            const updatedSt = updatedDoc.data();
+            const brName = FIXED_BRANCHES.find(b => b.id === (updatedSt.branchId || currentBranchId))?.name || 'Khác';
+            const saleMapLocal = {};
+            localState.sales.forEach(s => { saleMapLocal[s.id] = s.name; });
+            localState.teachers.forEach(t => { if (!saleMapLocal[t.id]) saleMapLocal[t.id] = t.name; });
+            const saleName = updatedSt.saleConfirmedBy || (updatedSt.creatorId ? saleMapLocal[updatedSt.creatorId] : '') || '';
+            const createdDate = updatedSt.createdAt?.toDate ? updatedSt.createdAt.toDate().toLocaleDateString('vi-VN') : '';
+            syncToGoogleSheet({
+                action: 'updateOrInsert',
+                data: {
+                    name: updatedSt.name || '',
+                    phone: updatedSt.phone || '',
+                    contractNumber: updatedSt.contractNumber || '',
+                    swimType: updatedSt.curriculum || '',
+                    ageGroup: updatedSt.ageCategory || '',
+                    teacherName: newTeacher.name || '',
+                    saleName: saleName,
+                    sessions: updatedSt.sessions || 0,
+                    branchName: brName,
+                    contractDate: createdDate
+                }
+            });
+        } catch (syncErr) { console.warn('Sheet sync transfer:', syncErr); }
+
+        alert(`✅ Đã chuyển nhượng "${studentName}" cho ${newTeacher.name} thành công!${attUpdated > 0 ? `\n📋 Đã cập nhật ${attUpdated} bản ghi điểm danh` : ''}\n📤 Đã đồng bộ lên Sheet.`);
     } catch (e) {
         console.error(e);
         alert('Lỗi: ' + e.message);
@@ -712,7 +778,7 @@ window.uploadCompletionVideo = function (studentId, studentName) {
 };
 
 // Tự động dọn video hết hạn (> 10 ngày)
-async function cleanupExpiredVideos() {
+window.cleanupExpiredVideos = async function cleanupExpiredVideos() {
     try {
         const snap = await db.collection('students').where('completionVideoUrl', '!=', '').get();
         const now = Date.now();
@@ -737,6 +803,5 @@ async function cleanupExpiredVideos() {
             }
         }
     } catch (e) { console.warn('Cleanup expired videos:', e); }
-}
+};
 // Cleanup video hết hạn sẽ được gọi sau khi auth hoàn tất (xem onAuthStateChanged)
-

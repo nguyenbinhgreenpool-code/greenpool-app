@@ -335,7 +335,9 @@
                             <p class="subtitle">Thứ tự ưu tiên từ trái qua phải. Sale sẽ dựa vào đây để chủ động phân bổ.</p>
                         </div>
                         <div style="display:flex; gap:6px; flex-wrap:wrap;">
-
+                        <button id="btn-queue-debug" onclick="showQueueDebug()" style="display:none; padding:6px 14px; border-radius:8px; border:1px solid rgba(139,92,246,0.3); background:rgba(139,92,246,0.1); color:#8b5cf6; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;">
+                            <i class="fa-solid fa-bug"></i> Trạng thái Queue
+                        </button>
                         <button id="btn-queue-history" onclick="showQueueHistory()" style="display:none; padding:6px 14px; border-radius:8px; border:1px solid rgba(16,185,129,0.3); background:rgba(16,185,129,0.1); color:#10b981; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;">
                             <i class="fa-solid fa-clock-rotate-left"></i> Lịch sử Turn
                         </button>
@@ -1017,26 +1019,6 @@
                                 nay.</div>
                         </div>
                     </div>
-
-                    <!-- Lịch sử Điểm danh CLB theo ngày -->
-                    <div class="section-container" style="margin-top: 20px;">
-                        <div class="section-header">
-                            <h3><i class="fa-solid fa-medal" style="color: #f59e0b;"></i> Lịch Sử Điểm Danh CLB</h3>
-                            <p class="subtitle">Xem danh sách VĐV CLB đã điểm danh theo ngày.</p>
-                        </div>
-                        <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
-                            <input type="date" id="letan-clb-history-date"
-                                style="padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--card-bg); color:var(--text-color); font-size:13px;"
-                                onchange="renderLetanClbHistory(this.value)">
-                            <span id="letan-clb-history-count" style="font-size:12px; color:var(--text-muted);"></span>
-                        </div>
-                        <div id="letan-clb-history-result" style="max-height:500px; overflow-y:auto;">
-                            <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">
-                                <i class="fa-solid fa-calendar-days" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>
-                                Chọn ngày để xem lịch sử điểm danh CLB
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- === Học Viên Mode === -->
@@ -1107,6 +1089,25 @@
                         </div>
                     </div>
 
+                    <!-- Lịch sử Điểm danh CLB theo ngày -->
+                    <div class="section-container" style="margin-top: 20px;">
+                        <div class="section-header">
+                            <h3><i class="fa-solid fa-medal" style="color: #f59e0b;"></i> Lịch Sử Điểm Danh CLB</h3>
+                            <p class="subtitle">Xem danh sách VĐV CLB đã điểm danh theo ngày.</p>
+                        </div>
+                        <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+                            <input type="date" id="letan-clb-history-date"
+                                style="padding:8px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--card-bg); color:var(--text-color); font-size:13px;"
+                                onchange="renderLetanClbHistory(this.value)">
+                            <span id="letan-clb-history-count" style="font-size:12px; color:var(--text-muted);"></span>
+                        </div>
+                        <div id="letan-clb-history-result" style="max-height:500px; overflow-y:auto;">
+                            <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">
+                                <i class="fa-solid fa-calendar-days" style="font-size:20px; display:block; margin-bottom:6px; opacity:0.3;"></i>
+                                Chọn ngày để xem lịch sử điểm danh CLB
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1232,32 +1233,32 @@
                             <div style="display:flex; gap:6px; flex-wrap:wrap;">
                                 <button onclick="event.stopPropagation(); syncAllStudentsToSheet()" class="btn btn-sm"
                                     style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
-                                    <i class="fa-solid fa-cloud-arrow-up"></i> Đồng bộ HV
+                                    <i class="fa-solid fa-cloud-arrow-up"></i> HV
                                 </button>
                                 <button onclick="event.stopPropagation(); syncAttendanceToSheet()" class="btn btn-sm"
                                     style="background: rgba(59,130,246,0.15); color: #3b82f6; border: 1px solid rgba(59,130,246,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
-                                    <i class="fa-solid fa-clipboard-check"></i> Đồng bộ ĐD
+                                    <i class="fa-solid fa-clipboard-check"></i> ĐD
                                 </button>
 
                                 <button onclick="event.stopPropagation(); auditSessionData()" class="btn btn-sm"
                                     style="background: rgba(14,165,233,0.15); color: #0ea5e9; border: 1px solid rgba(14,165,233,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
-                                    <i class="fa-solid fa-magnifying-glass-chart"></i> Kiểm tra
+                                    <i class="fa-solid fa-magnifying-glass-chart"></i> KT
                                 </button>
                                 <button onclick="event.stopPropagation(); restoreWronglyResetStudents()" class="btn btn-sm"
                                     style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
-                                    <i class="fa-solid fa-rotate-left"></i> Khôi phục
+                                    <i class="fa-solid fa-rotate-left"></i> KP
                                 </button>
                                 <button onclick="event.stopPropagation(); backupStudentData()" class="btn btn-sm"
                                     style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
-                                    <i class="fa-solid fa-database"></i> Sao lưu
+                                    <i class="fa-solid fa-database"></i> 💾
                                 </button>
                                 <button onclick="event.stopPropagation(); restoreFromBackup()" class="btn btn-sm"
                                     style="background: rgba(245,158,11,0.15); color: #d97706; border: 1px solid rgba(245,158,11,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
-                                    <i class="fa-solid fa-clock-rotate-left"></i> Phục hồi
+                                    <i class="fa-solid fa-clock-rotate-left"></i> ↩️
                                 </button>
                                 <button onclick="event.stopPropagation(); stopSyncSheet(); stopAttSync();" class="btn btn-sm"
                                     style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
-                                    <i class="fa-solid fa-stop"></i> Dừng
+                                    <i class="fa-solid fa-stop"></i>
                                 </button>
                             </div>
                         </div>
@@ -1669,10 +1670,8 @@
                 }
             </script>
             <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-            <script src="app.js?v=7.5"></script>
-            <script src="js/customer.js?v=7.2"></script>
-            <script src="js/teacher.js?v=7.5"></script>
-            <script src="js/letan.js?v=7.2"></script>
+            <script src="app.js?v=7.0"></script>
+            <script src="js/customer.js?v=7.0"></script>
 </body>
 
 </html>

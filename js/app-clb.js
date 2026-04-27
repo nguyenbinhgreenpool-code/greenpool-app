@@ -521,14 +521,14 @@ window.renderClbTable = function () {
         if (canPromote) {
             actionsHtml += `<button class="btn btn-sm" onclick="promoteAthlete('${a.id}', '${a.classLevel}')" style="font-size:11px; padding:4px 8px; background:rgba(16,185,129,0.1); color:#10b981; border:1px solid rgba(16,185,129,0.3);"><i class="fa-solid fa-arrow-up"></i> ${nextLevel}</button>`;
         }
-        if (!a.isExpired && !a.isFrozen && a.activatedAt && currentUserRole === 'ADMIN') {
+        if (!a.isExpired && !a.isFrozen && a.activatedAt && (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER')) {
             actionsHtml += ` <button class="btn btn-sm" onclick="extendAthlete('${a.id}')" style="font-size:11px; padding:4px 8px; background:rgba(245,158,11,0.1); color:#d97706; border:1px solid rgba(245,158,11,0.3);"><i class="fa-solid fa-calendar-plus"></i></button>`;
             actionsHtml += ` <button class="btn btn-sm" onclick="freezeAthlete('${a.id}')" style="font-size:11px; padding:4px 8px; background:rgba(99,102,241,0.1); color:#6366f1; border:1px solid rgba(99,102,241,0.3);"><i class="fa-solid fa-pause"></i> BL</button>`;
         }
-        if (a.isFrozen && currentUserRole === 'ADMIN') {
+        if (a.isFrozen && (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER')) {
             actionsHtml += ` <button class="btn btn-sm" onclick="unfreezeAthlete('${a.id}')" style="font-size:11px; padding:4px 8px; background:rgba(34,197,94,0.1); color:#16a34a; border:1px solid rgba(34,197,94,0.3);"><i class="fa-solid fa-play"></i> Mở BL</button>`;
         }
-        if (currentUserRole === 'ADMIN') {
+        if (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') {
             actionsHtml += ` <button class="btn btn-sm" onclick="editAthlete('${a.id}')" style="font-size:11px; padding:4px 8px; background:rgba(59,130,246,0.1); color:#3b82f6; border:1px solid rgba(59,130,246,0.3);"><i class="fa-solid fa-pen"></i></button>`;
             actionsHtml += ` <button class="btn btn-sm" onclick="deleteAthlete('${a.id}', '${a.name.replace(/'/g, "\\\\'")}')" style="font-size:11px; padding:4px 8px; background:rgba(239,68,68,0.1); color:#ef4444; border:1px solid rgba(239,68,68,0.3);"><i class="fa-solid fa-trash"></i></button>`;
         }
