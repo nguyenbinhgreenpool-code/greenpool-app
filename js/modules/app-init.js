@@ -2381,15 +2381,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } catch (e) { console.warn('[Discount] Load GP failed:', e.message); }
 
-            const fallbackPct = [
-                { label: 'Giảm 10%', code: 'GIAM10', type: 'percent', value: 10 },
-                { label: 'Giảm 15%', code: 'GIAM15', type: 'percent', value: 15 },
-                { label: 'Giảm 20%', code: 'GIAM20', type: 'percent', value: 20 },
-                { label: 'Giảm 25%', code: 'GIAM25', type: 'percent', value: 25 },
-                { label: 'Giảm 30%', code: 'GIAM30', type: 'percent', value: 30 },
-                { label: 'Giảm 40%', code: 'GIAM40', type: 'percent', value: 40 },
-                { label: 'Giảm 50%', code: 'GIAM50', type: 'percent', value: 50 },
-            ];
             const fallbackFixed = {
                 'branch_nguyen_co_thach': [
                     { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
@@ -2429,30 +2420,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 const sel = document.getElementById(`sale-student-discount-${i}`);
                 if (!sel) continue;
                 if (gpDiscounts) {
-                    const pctList = gpDiscounts.filter(d => d.type === 'percent');
-                    const fixedList = gpDiscounts.filter(d => d.type === 'fixed');
-                    if (pctList.length > 0) {
-                        const grp = document.createElement('optgroup');
-                        grp.label = '── Giảm % (GP) ──';
-                        pctList.forEach(d => { const opt = document.createElement('option'); opt.value = d.code; opt.textContent = d.label; opt.dataset.type = d.type; opt.dataset.value = d.value; opt.dataset.gpCode = 'true'; grp.appendChild(opt); });
-                        sel.appendChild(grp);
-                    }
-                    if (fixedList.length > 0) {
-                        const grp = document.createElement('optgroup');
-                        grp.label = '── Giảm số tiền (GP) ──';
-                        fixedList.forEach(d => { const opt = document.createElement('option'); opt.value = d.code; opt.textContent = `${d.label} (${d.code})`; opt.dataset.type = d.type; opt.dataset.value = d.value; opt.dataset.gpCode = 'true'; grp.appendChild(opt); });
-                        sel.appendChild(grp);
-                    }
+                    // Mã từ GP — hiện theo site
+                    gpDiscounts.forEach(d => {
+                        const opt = document.createElement('option');
+                        opt.value = d.code;
+                        opt.textContent = d.type === 'fixed' ? `${d.label} (${d.code})` : d.label;
+                        opt.dataset.type = d.type;
+                        opt.dataset.value = d.value;
+                        opt.dataset.gpCode = 'true';
+                        sel.appendChild(opt);
+                    });
                 } else {
-                    const grpPct = document.createElement('optgroup'); grpPct.label = '── Giảm % ──';
-                    fallbackPct.forEach(d => { const opt = document.createElement('option'); opt.value = d.code; opt.textContent = d.label; opt.dataset.type = d.type; opt.dataset.value = d.value; grpPct.appendChild(opt); });
-                    sel.appendChild(grpPct);
+                    // Fallback — chỉ mã cố định theo cơ sở
                     const branchFixed = fallbackFixed[currentBranchId] || [];
-                    if (branchFixed.length > 0) {
-                        const grpFixed = document.createElement('optgroup'); grpFixed.label = '── Giảm số tiền ──';
-                        branchFixed.forEach(d => { const opt = document.createElement('option'); opt.value = d.code; opt.textContent = d.label; opt.dataset.type = d.type; opt.dataset.value = d.value; grpFixed.appendChild(opt); });
-                        sel.appendChild(grpFixed);
-                    }
+                    branchFixed.forEach(d => {
+                        const opt = document.createElement('option');
+                        opt.value = d.code;
+                        opt.textContent = d.label;
+                        opt.dataset.type = d.type;
+                        opt.dataset.value = d.value;
+                        sel.appendChild(opt);
+                    });
                 }
             }
         })();
