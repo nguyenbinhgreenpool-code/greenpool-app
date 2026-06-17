@@ -1196,13 +1196,13 @@ async function syncDiscountsFromGP() {
                         }))
                     };
                 })
-                // Sắp xếp: % trước (tăng dần), fixed sau (tăng dần)
+                // Sắp xếp: fixed trước (tăng dần), % sau (tăng dần)
                 .sort((a, b) => {
                     if (a.type === b.type) return a.value - b.value;
-                    return a.type === 'percent' ? -1 : 1;
+                    return a.type === 'fixed' ? -1 : 1;
                 })
-                // Loại bỏ trùng lặp (cùng code)
-                .filter((d, idx, arr) => arr.findIndex(x => x.code === d.code) === idx);
+                // Loại bỏ trùng lặp (cùng type + value)
+                .filter((d, idx, arr) => arr.findIndex(x => x.type === d.type && x.value === d.value) === idx);
 
             sites[siteId] = {
                 name: acct.name,
