@@ -275,6 +275,7 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
         };
 
         let discountCode = rawDiscountCode;
+        let discountWarning = '';  // Cảnh báo khi mã bị drop
 
         if (paymentInfo?.isGpCode && discountCode) {
             // Mã GP gốc từ dropdown (đã sync từ GP) → gửi thẳng, KHÔNG mapping
@@ -294,9 +295,9 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
                 discountCode = gpCode;
                 console.log(`[GP-v2] Fixed discount: "${rawDiscountCode}" → "${discountCode}" (site ${siteId})`);
             } else {
-                // ⚠️ Mã chưa có mapping → KHÔNG gửi lên GP (tránh nợ ảo)
-                console.warn(`[GP-v2] ⚠️ Mã "${rawDiscountCode}" KHÔNG CÓ mapping cho site ${siteId} → bỏ qua discount (tránh nợ ảo)`);
-                discountCode = '';  // Xoá mã → GP sẽ tính full giá, không tạo nợ ảo
+                console.warn(`[GP-v2] ⚠️ Mã "${rawDiscountCode}" KHÔNG CÓ mapping cho site ${siteId}`);
+                discountWarning = `Mã "${rawDiscountCode}" không có trên GP cho cơ sở này (site ${siteId}). HĐ sẽ có nợ.`;
+                discountCode = '';
             }
         } else if (discountCode && /^(\d+)%$/.test(discountCode)) {
             // Mã dạng "15%", "20%", "10%" → GIAM15_NCT, GIAM20_CTT...
@@ -319,7 +320,8 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
                 discountCode = gpCode;
                 console.log(`[GP-v2] Numeric discount: "${rawDiscountCode}" → ${amountK}K → "${discountCode}" (site ${siteId})`);
             } else {
-                console.warn(`[GP-v2] ⚠️ Numeric discount "${rawDiscountCode}" (${amountK}K) KHÔNG CÓ mapping cho site ${siteId} → bỏ qua`);
+                console.warn(`[GP-v2] ⚠️ Numeric discount "${rawDiscountCode}" (${amountK}K) KHÔNG CÓ mapping cho site ${siteId}`);
+                discountWarning = `Mã "${rawDiscountCode}" (${amountK}K) không có trên GP cho cơ sở này (site ${siteId}). HĐ sẽ có nợ.`;
                 discountCode = '';
             }
         } else if (discountCode && /^(\d+)K$/i.test(discountCode)) {
@@ -332,12 +334,13 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
                 discountCode = gpCode;
                 console.log(`[GP-v2] Shorthand discount: "${rawDiscountCode}" → ${amountK}K → "${discountCode}" (site ${siteId})`);
             } else {
-                console.warn(`[GP-v2] ⚠️ Shorthand discount "${rawDiscountCode}" (${amountK}K) KHÔNG CÓ mapping cho site ${siteId} → bỏ qua`);
+                console.warn(`[GP-v2] ⚠️ Shorthand discount "${rawDiscountCode}" (${amountK}K) KHÔNG CÓ mapping cho site ${siteId}`);
+                discountWarning = `Mã "${rawDiscountCode}" (${amountK}K) không có trên GP cho cơ sở này (site ${siteId}). HĐ sẽ có nợ.`;
                 discountCode = '';
             }
         } else if (discountCode) {
-            // Mã cũ / mã tự nhập khác → bỏ qua nếu không nhận dạng được (tránh nợ ảo)
-            console.warn(`[GP-v2] ⚠️ Discount code "${discountCode}" không nhận dạng được → bỏ qua (tránh nợ ảo)`);
+            console.warn(`[GP-v2] ⚠️ Discount code "${discountCode}" không nhận dạng được`);
+            discountWarning = `Mã "${discountCode}" không nhận dạng được trên GP. HĐ sẽ có nợ.`;
             discountCode = '';
         }
         const paidAmount = parseInt(paymentInfo?.pay_amount || paymentInfo?.total_amount) || 0;
@@ -512,7 +515,7 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
                     console.warn(`[GP-v2] ⚠️ Auto-save failed: ${saveErr.message}`);
                 }
             }
-            return { success: true, subscribeId: subId, personId: personId };
+            return { success: true, subscribeId: subId, personId: personId, discountWarning: discountWarning || undefined };
         }
 
         // ========== LỖI ==========

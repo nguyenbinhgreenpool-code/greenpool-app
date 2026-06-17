@@ -319,8 +319,8 @@ async function syncToGreenPool(studentData) {
                 pay_method: payMethod,
                 pay_amount: paidAmount || originalAmount,
                 support_user_id: saleGpId,
-                discount_type: discountCode ? 'code' : undefined,
-                discount_value: discountCode ? discountCode.replace(/^GIAM/i, '').replace(/(\d+)K$/i, (m, n) => String(parseInt(n) * 1000)) : undefined
+                discount_code: discountCode || undefined,
+                isGpCode: isGpCode
             }
         };
         console.log('📤 [GP] Proxy payload:', JSON.stringify(proxyPayload));
@@ -332,8 +332,13 @@ async function syncToGreenPool(studentData) {
             if (proxyResult.data?.success) {
                 const subId = proxyResult.data.subscribeId;
                 const gpPersonId = proxyResult.data.personId;
+                const discountWarning = proxyResult.data.discountWarning;
                 console.log(`✅ [GP] Đồng bộ thành công! Subscribe ID: ${subId}, Person ID: ${gpPersonId}`);
-                return { success: true, subscribeId: subId, personId: gpPersonId };
+                if (discountWarning) {
+                    console.warn(`⚠️ [GP] Discount warning: ${discountWarning}`);
+                    alert(`⚠️ CẢNH BÁO MÃ GIẢM GIÁ:\n${discountWarning}\n\nHĐ đã tạo trên GP nhưng CÓ NỢ.\nVui lòng kiểm tra lại mã giảm giá trên GP.`);
+                }
+                return { success: true, subscribeId: subId, personId: gpPersonId, discountWarning };
             }
             // Trùng mã HĐ trên GP → bỏ qua sync, không alert Sale
             if (proxyResult.data?.error === 'duplicate_contract') {
