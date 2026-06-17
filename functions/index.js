@@ -1172,7 +1172,8 @@ async function syncDiscountsFromGP() {
                     const pkgs = d.packages || [];
                     if (pkgs.length === 0) return false;
                     // Discount phải có ÍT NHẤT 1 package thuộc danh sách học bơi
-                    return pkgs.some(p => swimPkgIds.includes(p.id));
+                    // Dùng Number() vì GP API có thể trả id dạng string
+                    return pkgs.some(p => swimPkgIds.includes(Number(p.id)));
                 })
                 .map(d => {
                     const type = d.discount_type; // 'percent' hoặc 'fixed'
@@ -1210,7 +1211,7 @@ async function syncDiscountsFromGP() {
                 count: discounts.length,
                 discounts: discounts
             };
-            console.log(`[SyncDisc] ✅ Site ${siteId} (${acct.label}): ${discounts.length} mã giảm`);
+            console.log(`[SyncDisc] ✅ Site ${siteId} (${acct.label}): ${allDiscounts.length} tổng → ${discounts.length} mã HB: ${discounts.map(d => d.code).join(', ')}`);
         } catch (e) {
             errors.push({ site: siteId, label: acct.label, error: e.message });
             console.error(`[SyncDisc] ❌ Site ${siteId}: ${e.message}`);
