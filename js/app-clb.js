@@ -292,38 +292,54 @@ function listenToAthletes() {
         query = query.where('branchId', '==', branchForFilter);
     }
 
-    // Load danh sách Sale vào dropdown
+    // Load danh sách Sale vào dropdown (dùng localState thay vì query Firestore)
     const saleSelect = document.getElementById('clb-sale');
     if (saleSelect && saleSelect.options.length <= 1) {
-        db.collection('users').get().then(snap => {
-            snap.docs.forEach(d => {
-                const u = d.data();
-                if (u.role === 'SALE' || u.role === 'ADMIN') {
-                    const opt = document.createElement('option');
-                    opt.value = d.id;
-                    opt.textContent = u.name;
-                    saleSelect.appendChild(opt);
-                }
-            });
+        const allUsers = [...(localState.teachers || []), ...(localState.sales || []), ...(localState.firedUsers || [])];
+        allUsers.forEach(u => {
+            if (u.role === 'SALE' || u.role === 'ADMIN') {
+                const opt = document.createElement('option');
+                opt.value = u.id;
+                opt.textContent = u.name;
+                saleSelect.appendChild(opt);
+            }
         });
     }
 
     clbAthleteUnsub = query.onSnapshot(snap => {
         clbAthletesCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-        // Auto-expire kiểm tra (cả 2 chiều)
+        // Auto-expire kiểm tra (cả 2 chiều) + auto-fix expiresAt
         const now = new Date();
         clbAthletesCache.forEach(a => {
+            // Auto-fix: tính lại expiresAt nếu thiếu hoặc sai
+            let exp = null;
             if (a.expiresAt) {
-                const exp = a.expiresAt.toDate ? a.expiresAt.toDate() : new Date(a.expiresAt);
-                if (!a.isExpired && now > exp) {
-                    // Hết hạn → đánh dấu
-                    db.collection('athletes').doc(a.id).update({ isExpired: true });
-                } else if (a.isExpired && now <= exp) {
-                    // Đã gia hạn (expiresAt mới > ngày hiện tại) nhưng flag cũ chưa reset → auto reset
-                    db.collection('athletes').doc(a.id).update({ isExpired: false });
-                    a.isExpired = false; // Update local cache ngay
+                exp = a.expiresAt.toDate ? a.expiresAt.toDate() : new Date(a.expiresAt);
+                if (isNaN(exp.getTime())) exp = null; // Invalid date
+            }
+            // Nếu expiresAt null/sai nhưng có activatedAt → tự tính lại
+            if (!exp && a.activatedAt) {
+                const act = a.activatedAt.toDate ? a.activatedAt.toDate() : new Date(a.activatedAt);
+                if (!isNaN(act.getTime())) {
+                    exp = new Date(act);
+                    exp.setMonth(exp.getMonth() + (a.contractMonths || 1));
+                    console.log(`🔧 [CLB] Auto-fix expiresAt cho ${a.name}: ${act.toLocaleDateString('vi-VN')} + ${a.contractMonths || 1} tháng = ${exp.toLocaleDateString('vi-VN')}`);
+                    db.collection('athletes').doc(a.id).update({ expiresAt: exp });
                 }
+            }
+            if (exp) {
+                const expEndOfDay = new Date(exp);
+                expEndOfDay.setHours(23, 59, 59, 999);
+                if (a.isExpired && now <= expEndOfDay) {
+                    console.log(`🔄 [CLB] Auto-reset ${a.name}: hạn ${exp.toLocaleDateString('vi-VN')} chưa hết`);
+                    db.collection('athletes').doc(a.id).update({ isExpired: false });
+                    a.isExpired = false;
+                } else if (!a.isExpired && now > expEndOfDay) {
+                    db.collection('athletes').doc(a.id).update({ isExpired: true });
+                }
+            } else if (a.isExpired && !a.activatedAt) {
+                console.log(`⚠️ [CLB] ${a.name}: isExpired=true nhưng không có activatedAt/expiresAt`);
             }
         });
 
@@ -411,41 +427,90 @@ window.renderClbTable = function () {
         // Today attendance count — filter theo cơ sở hiện tại
         const today = new Date(); today.setHours(0, 0, 0, 0);
         const brId = currentBranchId || currentUserBranchId;
-        db.collection('clb_attendance')
-            .where('branchId', '==', brId)
-            .where('timestamp', '>=', today)
-            .get().then(snap => {
-                let todayCount = snap.size;
-                if (currentUserRole === 'TEACHER') {
-                    const cc = window._currentUserData?.coachClasses || [];
-                    todayCount = snap.docs.filter(d => cc.includes(d.data().classLevel)).length;
-                }
-                const todayEl = document.getElementById('clb-today-count');
-                if (todayEl) todayEl.textContent = todayCount;
-            }).catch(() => {
-                // Fallback: nếu thiếu composite index, query không có orderBy
-                db.collection('clb_attendance')
-                    .where('branchId', '==', brId)
-                    .get().then(snap => {
-                        const todayDocs = snap.docs.filter(d => {
-                            const ts = d.data().timestamp?.toDate?.();
-                            return ts && ts >= today;
-                        });
-                        let todayCount = todayDocs.length;
-                        if (currentUserRole === 'TEACHER') {
-                            const cc = window._currentUserData?.coachClasses || [];
-                            todayCount = todayDocs.filter(d => cc.includes(d.data().classLevel)).length;
-                        }
-                        const todayEl = document.getElementById('clb-today-count');
-                        if (todayEl) todayEl.textContent = todayCount;
-                    });
-            });
+        // Cache 60s: không query Firestore mỗi lần render
+        const now = Date.now();
+        if (!window._clbAttCache || now - window._clbAttCache.ts > 60000 || window._clbAttCache.brId !== brId) {
+            db.collection('clb_attendance')
+                .where('branchId', '==', brId)
+                .where('timestamp', '>=', today)
+                .get().then(snap => {
+                    window._clbAttCache = { ts: now, brId, size: snap.size, docs: snap.docs };
+                    let todayCount = snap.size;
+                    if (currentUserRole === 'TEACHER') {
+                        const cc = window._currentUserData?.coachClasses || [];
+                        todayCount = snap.docs.filter(d => cc.includes(d.data().classLevel)).length;
+                    }
+                    const todayEl = document.getElementById('clb-today-count');
+                    if (todayEl) todayEl.textContent = todayCount;
+                }).catch(() => {});
+        } else {
+            let todayCount = window._clbAttCache.size;
+            if (currentUserRole === 'TEACHER') {
+                const cc = window._currentUserData?.coachClasses || [];
+                todayCount = window._clbAttCache.docs.filter(d => cc.includes(d.data().classLevel)).length;
+            }
+            const todayEl = document.getElementById('clb-today-count');
+            if (todayEl) todayEl.textContent = todayCount;
+        }
         statsHtml += `
             <div style="background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3); border-radius:10px; padding:12px; text-align:center;">
                 <div style="font-size:22px; font-weight:700; color:#10b981;" id="clb-today-count">...</div>
                 <div style="font-size:11px; color:var(--text-muted);">Điểm danh hôm nay</div>
             </div>`;
         statsContainer.innerHTML = statsHtml;
+
+        // --- CẢNH BÁO LỚP THIẾU GV (Admin/Manager) ---
+        if (currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') {
+            const orphanContainer = document.getElementById('clb-orphan-warning') || (() => {
+                const div = document.createElement('div');
+                div.id = 'clb-orphan-warning';
+                statsContainer.parentNode.insertBefore(div, statsContainer.nextSibling);
+                return div;
+            })();
+            const brId = currentBranchId || currentUserBranchId;
+            // Dùng localState thay vì query Firestore
+            const coveredClasses = new Set();
+            (localState.teachers || []).forEach(u => {
+                if (u.isCoach && (!u.branchId || u.branchId === brId)) {
+                    (u.coachClasses || []).forEach(cl => coveredClasses.add(cl));
+                }
+            });
+            // Tìm lớp có VĐV active nhưng không có GV
+            const orphanClasses = CLB_LEVELS.filter(l => {
+                const count = active.filter(a => a.classLevel === l).length;
+                return count > 0 && !coveredClasses.has(l);
+            });
+            if (orphanClasses.length === 0) {
+                orphanContainer.innerHTML = '';
+            } else {
+                let warnHtml = '';
+                orphanClasses.forEach(l => {
+                    const count = active.filter(a => a.classLevel === l).length;
+                    const otherClasses = CLB_LEVELS.filter(x => x !== l && coveredClasses.has(x));
+                    warnHtml += `
+                        <div style="background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.35); border-radius:10px; padding:12px 16px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                            <div>
+                                <div style="font-weight:700; color:#d97706; font-size:14px;">
+                                    <i class="fa-solid fa-triangle-exclamation"></i> Lớp ${l} chưa có HLV phụ trách
+                                </div>
+                                <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+                                    Có <strong>${count}</strong> VĐV đang hoạt động trong lớp này nhưng chưa gán HLV.
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                ${otherClasses.map(oc => `
+                                    <button onclick="bulkTransferClass('${l}', '${oc}')" class="btn btn-sm"
+                                        style="font-size:11px; padding:5px 12px; background:rgba(59,130,246,0.1); color:#3b82f6; border:1px solid rgba(59,130,246,0.3); white-space:nowrap;">
+                                        <i class="fa-solid fa-arrows-turn-right"></i> Chuyển → ${oc}
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                });
+                orphanContainer.innerHTML = warnHtml;
+            }
+        }
     }
 
     // --- FILTER ---
@@ -497,6 +562,8 @@ window.renderClbTable = function () {
         const levelIdx = CLB_LEVELS.indexOf(a.classLevel);
         const canPromote = levelIdx < CLB_LEVELS.length - 1 && !a.isExpired && !a.isFrozen;
         const nextLevel = canPromote ? CLB_LEVELS[levelIdx + 1] : null;
+        const canDemote = levelIdx > 0 && !a.isExpired && !a.isFrozen;
+        const prevLevel = canDemote ? CLB_LEVELS[levelIdx - 1] : null;
 
         let statusHtml = '';
         let dateHtml = '';
@@ -518,6 +585,9 @@ window.renderClbTable = function () {
 
         // Action buttons
         let actionsHtml = '';
+        if (canDemote) {
+            actionsHtml += `<button class="btn btn-sm" onclick="demoteAthlete('${a.id}', '${a.classLevel}')" style="font-size:11px; padding:4px 8px; background:rgba(245,158,11,0.1); color:#d97706; border:1px solid rgba(245,158,11,0.3);"><i class="fa-solid fa-arrow-down"></i> ${prevLevel}</button>`;
+        }
         if (canPromote) {
             actionsHtml += `<button class="btn btn-sm" onclick="promoteAthlete('${a.id}', '${a.classLevel}')" style="font-size:11px; padding:4px 8px; background:rgba(16,185,129,0.1); color:#10b981; border:1px solid rgba(16,185,129,0.3);"><i class="fa-solid fa-arrow-up"></i> ${nextLevel}</button>`;
         }
@@ -599,7 +669,7 @@ window.saveAthleteNote = async function (athleteId, note) {
     }
 };
 
-// Chuyển cấp VĐV
+// Chuyển cấp VĐV lên
 window.promoteAthlete = async function (athleteId, currentLevel) {
     const idx = CLB_LEVELS.indexOf(currentLevel);
     if (idx >= CLB_LEVELS.length - 1) return alert('VĐV đã ở cấp cao nhất (A)!');
@@ -607,6 +677,35 @@ window.promoteAthlete = async function (athleteId, currentLevel) {
     if (!confirm(`⬆️ Chuyển VĐV lên lớp ${nextLevel}?`)) return;
     await db.collection('athletes').doc(athleteId).update({ classLevel: nextLevel });
     alert(`✅ Đã chuyển lên lớp ${nextLevel}!`);
+};
+
+// Chuyển cấp VĐV xuống
+window.demoteAthlete = async function (athleteId, currentLevel) {
+    const idx = CLB_LEVELS.indexOf(currentLevel);
+    if (idx <= 0) return alert('VĐV đã ở cấp thấp nhất (Mầm)!');
+    const prevLevel = CLB_LEVELS[idx - 1];
+    if (!confirm(`⬇️ Chuyển VĐV xuống lớp ${prevLevel}?`)) return;
+    await db.collection('athletes').doc(athleteId).update({ classLevel: prevLevel });
+    alert(`✅ Đã chuyển xuống lớp ${prevLevel}!`);
+};
+// Chuyển VĐV hàng loạt từ lớp A sang lớp B (Admin/Manager)
+window.bulkTransferClass = async function (fromClass, toClass) {
+    const brId = currentBranchId || currentUserBranchId;
+    const athletes = clbAthletesCache.filter(a => a.classLevel === fromClass && !a.isExpired && a.branchId === brId);
+    if (athletes.length === 0) return alert(`Không có VĐV active nào ở lớp ${fromClass}!`);
+
+    if (!confirm(`⚠️ Chuyển TẤT CẢ ${athletes.length} VĐV từ lớp ${fromClass} → lớp ${toClass}?\n\nDanh sách:\n${athletes.map(a => '• ' + a.name).join('\n')}`)) return;
+
+    try {
+        const batch = db.batch();
+        athletes.forEach(a => {
+            batch.update(db.collection('athletes').doc(a.id), { classLevel: toClass });
+        });
+        await batch.commit();
+        alert(`✅ Đã chuyển ${athletes.length} VĐV từ lớp ${fromClass} → ${toClass}!`);
+    } catch (e) {
+        alert('Lỗi: ' + e.message);
+    }
 };
 
 // Gia hạn nghỉ lễ hàng loạt (Admin)

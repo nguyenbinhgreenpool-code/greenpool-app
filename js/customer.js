@@ -52,7 +52,8 @@ window.loadLinkedContracts = async function loadLinkedContracts() {
                 const branchName = branch?.name || 'N/A';
                 const expDate = a.expiresAt?.toDate ? a.expiresAt.toDate() : (a.expiresAt ? new Date(a.expiresAt) : null);
                 const activDate = a.activatedAt?.toDate ? a.activatedAt.toDate() : (a.activatedAt ? new Date(a.activatedAt) : null);
-                const isExpired = a.isExpired || (expDate && new Date() > expDate);
+                const _expEnd = expDate ? new Date(expDate.getFullYear(), expDate.getMonth(), expDate.getDate(), 23, 59, 59) : null;
+                const isExpired = a.isExpired || (_expEnd && new Date() > _expEnd);
                 const isFrozen = a.isFrozen;
 
                 // Status badge
@@ -273,28 +274,51 @@ window.searchStudentProgress = function (query) {
                 return;
             }
 
-            const partSnap = await db.collection('students').where('branchId', '==', selectedBranch).get();
-            // Tìm thêm VĐV CLB
-            const clbSnap = await db.collection('athletes').where('branchId', '==', selectedBranch).get();
-
             const q = query.trim().toLowerCase().replace(/\s+/g, '');
 
-            // KHÁCH HÀNG + TẤT CẢ: chỉ khớp chính xác SĐT, Số HĐ, hoặc Họ tên đầy đủ
-            const filterFn = (s) => {
-                const contract = (s.contractNumber || '').toLowerCase().replace(/\s+/g, '');
-                const phone = (s.phone || '').replace(/\s+/g, '');
-                const name = (s.name || '').toLowerCase().replace(/\s+/g, '');
-                // Khớp chính xác: Số HĐ hoặc SĐT hoặc Họ tên
-                return contract === q || phone === q || name === q;
-            };
+            // Query trực tiếp Firestore theo từng trường (thay vì tải toàn bộ!)
+            const studentResults = [];
+            const clbResults = [];
 
-            const studentResults = partSnap.docs
-                .map(d => ({ id: d.id, ...d.data(), _type: 'student' }))
-                .filter(filterFn);
+            // 1. Tìm theo số HĐ (chính xác)
+            const [stuByCN, clbByCN] = await Promise.all([
+                db.collection('students').where('branchId', '==', selectedBranch)
+                    .where('contractNumber', '==', query.trim()).get(),
+                db.collection('athletes').where('branchId', '==', selectedBranch)
+                    .where('contractNumber', '==', query.trim()).get()
+            ]);
+            stuByCN.docs.forEach(d => studentResults.push({ id: d.id, ...d.data(), _type: 'student' }));
+            clbByCN.docs.forEach(d => clbResults.push({ id: d.id, ...d.data(), _type: 'clb' }));
 
-            const clbResults = clbSnap.docs
-                .map(d => ({ id: d.id, ...d.data(), _type: 'clb' }))
-                .filter(filterFn);
+            // 2. Nếu chưa tìm thấy → thử SĐT
+            if (studentResults.length === 0 && clbResults.length === 0) {
+                const [stuByPhone, clbByPhone] = await Promise.all([
+                    db.collection('students').where('branchId', '==', selectedBranch)
+                        .where('phone', '==', query.trim()).get(),
+                    db.collection('athletes').where('branchId', '==', selectedBranch)
+                        .where('phone', '==', query.trim()).get()
+                ]);
+                stuByPhone.docs.forEach(d => studentResults.push({ id: d.id, ...d.data(), _type: 'student' }));
+                clbByPhone.docs.forEach(d => clbResults.push({ id: d.id, ...d.data(), _type: 'clb' }));
+            }
+
+            // 3. Nếu vẫn chưa tìm thấy → thử tên (exact match, cần tải cơ sở)
+            if (studentResults.length === 0 && clbResults.length === 0) {
+                const [partSnap, clbSnap] = await Promise.all([
+                    db.collection('students').where('branchId', '==', selectedBranch).get(),
+                    db.collection('athletes').where('branchId', '==', selectedBranch).get()
+                ]);
+                partSnap.docs.forEach(d => {
+                    const s = { id: d.id, ...d.data(), _type: 'student' };
+                    const name = (s.name || '').toLowerCase().replace(/\s+/g, '');
+                    if (name === q) studentResults.push(s);
+                });
+                clbSnap.docs.forEach(d => {
+                    const s = { id: d.id, ...d.data(), _type: 'clb' };
+                    const name = (s.name || '').toLowerCase().replace(/\s+/g, '');
+                    if (name === q) clbResults.push(s);
+                });
+            }
 
             const results = [...studentResults, ...clbResults];
 
@@ -336,7 +360,8 @@ window.searchStudentProgress = function (query) {
                     const levelColor = { 'Mầm': '#ec4899', 'D1': '#3b82f6', 'D2': '#8b5cf6', 'C': '#f59e0b', 'B': '#ef4444', 'A': '#10b981' }[st.classLevel] || '#6b7280';
                     const activatedAt = st.activatedAt?.toDate ? st.activatedAt.toDate() : null;
                     const expiresAt = st.expiresAt?.toDate ? st.expiresAt.toDate() : null;
-                    const isExpired = st.isExpired || (expiresAt && expiresAt < new Date());
+                    const _expEnd2 = expiresAt ? new Date(expiresAt.getFullYear(), expiresAt.getMonth(), expiresAt.getDate(), 23, 59, 59) : null;
+                    const isExpired = st.isExpired || (_expEnd2 && _expEnd2 < new Date());
                     const statusText = st.isFrozen ? '⏸ Bảo lưu' : isExpired ? '❌ Hết hạn' : '✅ Hoạt động';
                     const statusColor = st.isFrozen ? '#6366f1' : isExpired ? '#ef4444' : '#16a34a';
 
@@ -539,104 +564,7 @@ window.searchStudentProgress = function (query) {
                 </div>`;
             }).join('');
 
-            // ===== Tìm VĐV CLB TL KID =====
-            try {
-                const clbSnap = await db.collection('athletes').get();
-                const clbResults = clbSnap.docs
-                    .map(d => ({ id: d.id, ...d.data() }))
-                    .filter(a => a.name.toLowerCase().includes(q) || (a.phone || '').includes(q) || (a.contractNumber || '').toLowerCase().includes(q));
-
-                if (clbResults.length > 0) {
-                    // Tìm HLV phụ trách theo classLevel
-                    const coachSnap = await db.collection('users').where('isCoach', '==', true).get();
-                    const coachMap = {};
-                    coachSnap.docs.forEach(doc => {
-                        const u = doc.data();
-                        (u.coachClasses || []).forEach(cl => {
-                            if (!coachMap[cl + '_' + (u.branchId || '')]) coachMap[cl + '_' + (u.branchId || '')] = u.name;
-                        });
-                    });
-
-                    // Lấy điểm danh CLB hôm nay
-                    const clbToday = new Date(); clbToday.setHours(0, 0, 0, 0);
-                    const clbNow = Date.now();
-                    let clbAttMap = {};
-                    try {
-                        const clbAttSnap = await db.collection('clb_attendance').where('timestamp', '>=', clbToday).get();
-                        clbAttSnap.docs.forEach(d => {
-                            const data = d.data();
-                            const ts = data.timestamp?.toDate ? data.timestamp.toDate().getTime() : 0;
-                            if (!clbAttMap[data.athleteId] || ts > clbAttMap[data.athleteId].latest) {
-                                clbAttMap[data.athleteId] = { count: (clbAttMap[data.athleteId]?.count || 0) + 1, latest: ts };
-                            } else {
-                                clbAttMap[data.athleteId].count++;
-                            }
-                        });
-                    } catch (e) { console.warn('CLB att query:', e); }
-
-                    const levelColor = { 'Mầm': '#ec4899', 'D1': '#3b82f6', 'D2': '#8b5cf6', 'C': '#f59e0b', 'B': '#ef4444', 'A': '#10b981' };
-
-                    container.innerHTML += `<div style="margin-top:16px; padding-top:16px; border-top:2px solid var(--border-color);">
-                        <div style="font-size:14px; font-weight:700; color:#f59e0b; margin-bottom:12px;">
-                            <i class="fa-solid fa-medal"></i> CLB TL KID (${clbResults.length} kết quả)
-                        </div>` +
-                        clbResults.map(a => {
-                            const lc = levelColor[a.classLevel] || '#6b7280';
-                            const coachName = coachMap[a.classLevel + '_' + (a.branchId || '')] || 'Chưa gán HLV';
-                            const branchName = FIXED_BRANCHES.find(b => b.id === a.branchId)?.name || '';
-
-                            let statusBadge = '';
-                            if (a.isFrozen) {
-                                statusBadge = '<span style="font-size:11px; background:rgba(99,102,241,0.1); color:#6366f1; padding:2px 8px; border-radius:20px; font-weight:600;">⏸ Bảo lưu</span>';
-                            } else if (a.isExpired) {
-                                statusBadge = '<span style="font-size:11px; background:rgba(239,68,68,0.1); color:#ef4444; padding:2px 8px; border-radius:20px; font-weight:600;">Hết hạn</span>';
-                            } else if (a.activatedAt) {
-                                statusBadge = '<span style="font-size:11px; background:rgba(34,197,94,0.1); color:#16a34a; padding:2px 8px; border-radius:20px; font-weight:600;">🏊 Đang học</span>';
-                            } else {
-                                statusBadge = '<span style="font-size:11px; background:rgba(107,114,128,0.1); color:#6b7280; padding:2px 8px; border-radius:20px; font-weight:600;">Chưa kích hoạt</span>';
-                            }
-
-                            // Trạng thái điểm danh hôm nay
-                            let todayBadge = '';
-                            const cAtt = clbAttMap[a.id];
-                            if (cAtt) {
-                                const elapsed = clbNow - cAtt.latest;
-                                if (elapsed < 90 * 60 * 1000) {
-                                    const rMin = Math.ceil((90 * 60 * 1000 - elapsed) / 60000);
-                                    todayBadge = `<div style="font-size:12px; color:#3b82f6; font-weight:600; margin-top:4px;">🏊 Đang tập luyện (còn ${rMin}p)</div>`;
-                                } else {
-                                    todayBadge = `<div style="font-size:12px; color:#10b981; font-weight:600; margin-top:4px;">✅ Đã điểm danh hôm nay (${cAtt.count} lần)</div>`;
-                                }
-                            } else {
-                                todayBadge = `<div style="font-size:12px; color:var(--text-muted); margin-top:4px;">⭕ Chưa điểm danh hôm nay</div>`;
-                            }
-
-                            const expDate = a.expiresAt?.toDate ? a.expiresAt.toDate().toLocaleDateString('vi-VN') : '';
-
-                            return `
-                        <div style="padding:16px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; margin-bottom:10px;">
-                            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
-                                <span style="font-weight:700; font-size:16px; color:var(--text-color);">${a.name}</span>
-                                <span style="background:${lc}; color:#fff; padding:2px 10px; border-radius:20px; font-size:12px; font-weight:700;">Lớp ${a.classLevel}</span>
-                                ${statusBadge}
-                            </div>
-                            <div style="font-size:13px; color:var(--text-muted); margin-bottom:6px;">
-                                <i class="fa-solid fa-medal" style="color:#f59e0b;"></i> HLV: <strong style="color:var(--primary);">${coachName}</strong>
-                                ${branchName ? ` · <i class="fa-solid fa-location-dot"></i> ${branchName}` : ''}
-                            </div>
-                            <div style="font-size:13px; color:var(--text-muted); margin-bottom:6px;">
-                                ${a.contractNumber ? `<i class="fa-solid fa-file-contract"></i> HĐ: <strong>${a.contractNumber}</strong>` : ''}
-                                · ${a.sessionsPerWeek} buổi/tuần · ${a.contractMonths} tháng
-                                ${expDate ? ` · Hạn: ${expDate}` : ''}
-                            </div>
-                            <div style="font-size:13px; color:var(--primary); font-weight:600;">
-                                <i class="fa-solid fa-check-circle"></i> Đã học: ${a.totalAttendance || 0} buổi
-                            </div>
-                            ${todayBadge}
-                        </div>`;
-                        }).join('') + '</div>';
-                }
-            } catch (clbErr) { console.warn('CLB search:', clbErr); }
+            // CLB results đã được tìm ở trên (clbResults) — không cần query lại
         } catch (e) {
             console.error(e);
             container.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--danger);">Lỗi: ${e.message}</div>`;

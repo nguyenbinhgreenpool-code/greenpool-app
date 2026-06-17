@@ -6,7 +6,42 @@
       "firebase.json",
       "**/.*",
       "**/node_modules/**",
-      "functions/**"
+      "functions/**",
+      "**/*.backup*",
+      "**/*.bak",
+      "*.md",
+      "package*.json",
+      "createAdmin.js",
+      "setAdmin.js",
+      "testAuth.js",
+      "test_fb_auth.js",
+      "test.js",
+      "fix-tk-sessions.js",
+      "google-apps-script.js",
+      "Implementation*",
+      "js/app-admin.js",
+      "js/app-core.js",
+      "js/app-common.js",
+      "js/app-teacher.js",
+      "js/app-sale.js",
+      "js/app-letan.js",
+      "js/app-customer.js",
+      "js/app-clb.js",
+      "js/_backup_old/**"
+    ],
+    "headers": [
+      {
+        "source": "**/*.js",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=3600" }
+        ]
+      },
+      {
+        "source": "**/*.css",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=3600" }
+        ]
+      }
     ],
     "rewrites": [
       {

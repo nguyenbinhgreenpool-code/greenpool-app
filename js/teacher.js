@@ -10,6 +10,8 @@
 
 let teacherSearchQuery = '';
 let teacherFilterMode = 'all';
+let teacherSalaryMonthFilter = ''; // '' = tất cả, '2026-05' = tháng 5/2026
+window.teacherSalaryMonthFilter = '';
 
 window.renderTeacherStudents = function renderTeacherStudents() {
     const list = document.getElementById('teacher-students-list');
@@ -40,17 +42,7 @@ window.renderTeacherStudents = function renderTeacherStudents() {
                     : (selectedTeacher.name || 'G').charAt(0).toUpperCase();
             }
             if (nameEl) {
-                // Tìm tất cả vị trí (slot numbers cố định) của GV này trong fixedOrder
-                const fo = localState.fixedOrder;
-                const slotNums = localState.fixedSlotNumbers;
-                let slotLabels = [];
-                for (let qi = 0; qi < fo.length; qi++) {
-                    if (fo[qi] === selectedTeacher.id) {
-                        slotLabels.push(slotNums[qi] || (qi + 1));
-                    }
-                }
-                const posLabel = slotLabels.length > 0 ? `#${slotLabels.join(', #')} ` : '';
-                nameEl.textContent = posLabel + (selectedTeacher.name || '');
+                nameEl.textContent = selectedTeacher.name || '';
             }
             if (emailEl) emailEl.textContent = selectedTeacher.email || '';
             if (detailsEl) {
@@ -58,12 +50,10 @@ window.renderTeacherStudents = function renderTeacherStudents() {
                 const branchName = FIXED_BRANCHES.find(b => b.id === selectedTeacher.branchId)?.name || '';
                 if (branchName) badges += `<span style="background:rgba(37,99,235,0.1); color:var(--primary); padding:3px 8px; border-radius:12px;">📍 ${branchName}</span>`;
                 badges += `<span style="background:rgba(37,99,235,0.1); color:var(--primary); padding:3px 8px; border-radius:12px;">🎫 ${selectedTeacher.teacherType || 'Chính'}</span>`;
-                // Hiển thị vị trí hiện tại trong queue (slot gần nhất)
-                const posInQueue = localState.fixedOrder.indexOf(selectedTeacher.id);
-                const ciPos = localState.currentIndex || 0;
+                // Hiển thị vị trí hiện tại trong queue FIFO
+                const posInQueue = localState.queue.indexOf(selectedTeacher.id);
                 if (posInQueue !== -1) {
-                    const distFromCurrent = (posInQueue - ciPos + localState.fixedOrder.length) % localState.fixedOrder.length;
-                    badges += `<span style="background:rgba(139,92,246,0.1); color:#7c3aed; padding:3px 8px; border-radius:12px;">🔢 Vị trí: ${distFromCurrent === 0 ? 'TOP 1' : `cách ${distFromCurrent} lượt`}</span>`;
+                    badges += `<span style="background:rgba(139,92,246,0.1); color:#7c3aed; padding:3px 8px; border-radius:12px;">🔢 Vị trí: ${posInQueue === 0 ? 'TOP 1' : `cách ${posInQueue} lượt`}</span>`;
                 }
                 if (selectedTeacher.phone) badges += `<span style="background:rgba(16,185,129,0.1); color:var(--secondary); padding:3px 8px; border-radius:12px;">📱 ${selectedTeacher.phone}</span>`;
                 if (selectedTeacher.qualification) badges += `<span style="background:rgba(245,158,11,0.1); color:#d97706; padding:3px 8px; border-radius:12px;">🎓 ${selectedTeacher.qualification}</span>`;
@@ -79,12 +69,34 @@ window.renderTeacherStudents = function renderTeacherStudents() {
 
     const allStudents = filterByDate(localState.students.filter(s => s.assignedTeacherId === teacherId));
 
+    // Populate salary month dropdown
+    const monthSel = document.getElementById('teacher-salary-month-filter');
+    if (monthSel) {
+        const months = new Set();
+        allStudents.forEach(s => {
+            if (s.salarySubmittedMonth) months.add(s.salarySubmittedMonth);
+        });
+        const sortedMonths = [...months].sort().reverse();
+        const currentVal = teacherSalaryMonthFilter || window.teacherSalaryMonthFilter || '';
+        let optHtml = '<option value="">Tất cả</option>';
+        optHtml += '<option value="__not_submitted__"' + (currentVal === '__not_submitted__' ? ' selected' : '') + '>❌ Chưa chốt lương</option>';
+        sortedMonths.forEach(m => {
+            const parts = m.split('-');
+            const label = parts.length === 2 ? `Tháng ${parseInt(parts[1])}/${parts[0]}` : m;
+            optHtml += `<option value="${m}"${currentVal === m ? ' selected' : ''}>${label}</option>`;
+        });
+        monthSel.innerHTML = optHtml;
+    }
+
     // Thống kê nhanh
-    const totalCount = allStudents.length;
+    const archivedCount = (localState.archivedCountByTeacher || {})[teacherId] || 0;
+    const totalCount = localState.showArchived ? allStudents.length : (allStudents.length + archivedCount);
     const activeCount = allStudents.filter(s => s.sessions < (s.totalSessions || 10)).length;
     const doneCount = allStudents.filter(s => s.sessions >= (s.totalSessions || 10)).length;
 
     if (statsBox) {
+        const showingArchived = localState.showArchived || false;
+        const archiveBtnText = showingArchived ? `📂 Ẩn ${archivedCount} HV đã hoàn thành ▲` : `📂 Xem ${archivedCount} HV đã hoàn thành`;
         statsBox.innerHTML = renderDateFilterBar() + `
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px;">
             <div style="text-align: center; padding: 10px; background: rgba(37,99,235,0.08); border-radius: 8px; border: 1px solid rgba(37,99,235,0.15);">
@@ -100,6 +112,11 @@ window.renderTeacherStudents = function renderTeacherStudents() {
                 <div style="font-size: 11px; color: var(--text-muted);">Hoàn thành</div>
             </div>
             </div>
+            ${archivedCount > 0 ? `<div style="margin-top:10px; text-align:center;">
+                <button onclick="toggleArchivedStudents('${teacherId}')" style="background:rgba(139,92,246,0.1); color:#8b5cf6; border:1px solid rgba(139,92,246,0.3); padding:8px 16px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:600; transition:all 0.2s;">
+                    ${archiveBtnText}
+                </button>
+            </div>` : ''}
         `;
     }
 
@@ -120,6 +137,14 @@ window.renderTeacherStudents = function renderTeacherStudents() {
         filtered = filtered.filter(s => s.isTestStudent === true);
     } else if (teacherFilterMode === 'zero') {
         filtered = filtered.filter(s => (s.sessions || 0) === 0);
+    }
+
+    // Lọc theo tháng chốt lương
+    const salaryMonthVal = teacherSalaryMonthFilter || window.teacherSalaryMonthFilter || '';
+    if (salaryMonthVal === '__not_submitted__') {
+        filtered = filtered.filter(s => !s.salarySubmittedMonth);
+    } else if (salaryMonthVal) {
+        filtered = filtered.filter(s => s.salarySubmittedMonth === salaryMonthVal);
     }
 
     // Lọc theo tên tìm kiếm
@@ -175,7 +200,7 @@ window.renderTeacherStudents = function renderTeacherStudents() {
 
         // Dòng ngang gọn: Tên HV (Sale) Số HĐ
         htmlParts += `
-            <div class="student-compact-row" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--card-bg); border: 1px solid ${isSalaryConfirmed ? 'rgba(16,185,129,0.3)' : (isDone ? 'rgba(239,68,68,0.2)' : 'var(--border-color)')}; border-radius: 8px; cursor: pointer; transition: all 0.2s; ${isDone && !isSalaryConfirmed ? 'opacity:0.7;' : ''} ${isSalaryConfirmed ? 'background: rgba(16,185,129,0.05);' : ''}" 
+            <div class="student-compact-row" data-student-id="${st.id}" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--card-bg); border: 1px solid ${isSalaryConfirmed ? 'rgba(16,185,129,0.3)' : (isDone ? 'rgba(239,68,68,0.2)' : 'var(--border-color)')}; border-radius: 8px; cursor: pointer; transition: all 0.2s; ${isDone && !isSalaryConfirmed ? 'opacity:0.7;' : ''} ${isSalaryConfirmed ? 'background: rgba(16,185,129,0.05);' : ''}" 
                  onclick="var act = this.nextElementSibling; if(act && act.classList.contains('compact-details')) act.classList.toggle('expanded');">
                 
                 <div style="flex: 1; min-width: 0;">
@@ -300,7 +325,75 @@ window.renderTeacherStudents = function renderTeacherStudents() {
             </div>
         `;
     });
+    // Lưu scroll position và trạng thái mở rộng trước khi re-render
+    const scrollY = window.scrollY || window.pageYOffset;
+    const expandedIds = new Set();
+    document.querySelectorAll('.compact-details.expanded').forEach(el => {
+        const prevRow = el.previousElementSibling;
+        if (prevRow) {
+            const rowId = prevRow.getAttribute('data-student-id');
+            if (rowId) expandedIds.add(rowId);
+        }
+    });
+
     list.innerHTML = htmlParts;
+
+    // Khôi phục trạng thái mở rộng
+    expandedIds.forEach(sid => {
+        const row = list.querySelector(`[data-student-id="${sid}"]`);
+        if (row) {
+            const details = row.nextElementSibling;
+            if (details && details.classList.contains('compact-details')) {
+                details.classList.add('expanded');
+            }
+        }
+    });
+
+    // Khôi phục scroll position sau khi DOM đã render
+    requestAnimationFrame(() => {
+        window.scrollTo(0, scrollY);
+    });
+};
+
+// Toggle xem HV đã hoàn thành (lazy load)
+window.toggleArchivedStudents = async function (teacherId) {
+    if (localState.showArchived) {
+        // Ẩn: bỏ archived students khỏi localState
+        localState.showArchived = false;
+        localState.students = localState.students.filter(s => !s._isArchived);
+        localState.archivedStudents = [];
+        renderTeacherStudents();
+        return;
+    }
+
+    // Hiện: load từ Firestore
+    const brId = currentBranchId || (localState.students[0]?.branchId);
+    if (!brId) return;
+
+    try {
+        const snap = await db.collection('students')
+            .where('branchId', '==', brId)
+            .where('isFullyCompleted', '==', true)
+            .get();
+
+        const archivedDocs = snap.docs
+            .map(doc => ({ id: doc.id, ...doc.data(), _isArchived: true }))
+            .filter(s => s.assignedTeacherId === teacherId)
+            .sort((a, b) => {
+                const tA = a.createdAt?.toDate?.() || a.createdAt || 0;
+                const tB = b.createdAt?.toDate?.() || b.createdAt || 0;
+                return tB - tA;
+            });
+
+        localState.showArchived = true;
+        localState.archivedStudents = archivedDocs;
+        // Merge vào localState.students tạm thời
+        localState.students = [...localState.students.filter(s => !s._isArchived), ...archivedDocs];
+        renderTeacherStudents();
+    } catch (e) {
+        console.error('Load archived students error:', e);
+        alert('Lỗi tải HV đã hoàn thành: ' + e.message);
+    }
 };
 // Bổ sung/sửa thông tin HV
 // Xem lịch sử điểm danh của HV
@@ -488,6 +581,13 @@ window.editStudentInfo = async function (studentId) {
     }
 
     if (Object.keys(updates).length === 0) return alert('Không có thay đổi nào.');
+
+    // Auto-reset isFullyCompleted nếu sửa sessions/totalSessions khiến chưa hoàn thành
+    const newSessions = updates.sessions !== undefined ? updates.sessions : (st.sessions || 0);
+    const newTotal = updates.totalSessions !== undefined ? updates.totalSessions : (st.totalSessions || 10);
+    if (newSessions < newTotal && st.isFullyCompleted) {
+        updates.isFullyCompleted = false;
+    }
 
     try {
         await db.collection('students').doc(studentId).update(updates);

@@ -1,116 +1,11 @@
 // ===================== MODULE LỄ TÂN - ĐIỂM DANH ===================== //
 // Tách từ app.js ngày 2026-04-15
 // Functions: searchStudentForAttendance, markAttendance, cancelAttendance,
-//            renderLetanManageTable, renderLetanHistory, renderLetanClbHistory,
-//            loadTodayAttendance, renderTodayAttendance
+//            renderLetanManageTable, renderLetanHistory, renderLetanClbHistory
 // Dependencies: localState, db, currentUserId, currentUserRole,
 //               currentUserDisplayName, currentBranchId, FIXED_BRANCHES,
 //               sendNotification, syncToGoogleSheet, renderManageStudents
 // ==================================================================== //
-
-// ============ ĐIỂM DANH HÔM NAY (LOCAL TRACKING) ============ //
-// Mảng local — push khi điểm danh, load 1 lần khi mở tab
-let _todayAttendanceList = [];
-
-// Load điểm danh hôm nay từ Firestore — chỉ gọi 1 lần khi mở tab
-window.loadTodayAttendance = async function () {
-    const container = document.getElementById('letan-today-attendance');
-    if (!container || !currentBranchId) return;
-
-    container.innerHTML = '<div style="text-align:center; padding:15px; color:var(--text-muted); font-size:12px;"><i class="fa-solid fa-spinner fa-spin"></i> Đang tải...</div>';
-
-    try {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
-        const snap = await db.collection('attendance')
-            .where('branchId', '==', currentBranchId)
-            .where('createdAt', '>=', todayStart)
-            .get();
-
-        _todayAttendanceList = [];
-        snap.forEach(doc => {
-            const d = doc.data();
-            const t = d.createdAt?.toDate ? d.createdAt.toDate() : null;
-            _todayAttendanceList.push({
-                docId: doc.id,
-                studentId: d.studentId || '',
-                studentName: d.studentName || 'HV',
-                teacherName: d.teacherName || '?',
-                sessionNumber: d.sessionNumber || 0,
-                checkedByName: d.checkedByName || 'LT',
-                time: t
-            });
-        });
-
-        // Sort mới nhất trước
-        _todayAttendanceList.sort((a, b) => (b.time || 0) - (a.time || 0));
-        renderTodayAttendance();
-    } catch (e) {
-        console.error('loadTodayAttendance error:', e);
-        container.innerHTML = '<div style="text-align:center; padding:15px; color:#ef4444; font-size:12px;">Lỗi tải dữ liệu</div>';
-    }
-};
-
-// Render danh sách điểm danh hôm nay từ mảng local (0 reads!)
-window.renderTodayAttendance = function () {
-    const container = document.getElementById('letan-today-attendance');
-    const countEl = document.getElementById('letan-today-count');
-    if (!container) return;
-
-    // Đếm unique students
-    const uniqueStudents = new Set(_todayAttendanceList.map(a => a.studentId));
-
-    if (countEl) countEl.textContent = `${_todayAttendanceList.length} lượt · ${uniqueStudents.size} HV`;
-
-    if (_todayAttendanceList.length === 0) {
-        container.innerHTML = `<div style="text-align:center; padding:25px; color:var(--text-muted); font-size:13px;">
-            <i class="fa-solid fa-clipboard" style="font-size:24px; display:block; margin-bottom:8px; opacity:0.3;"></i>
-            Chưa có HV điểm danh hôm nay
-        </div>`;
-        return;
-    }
-
-    // Lookup student info from localState
-    const studentMap = {};
-    (localState.students || []).forEach(s => { studentMap[s.id] = s; });
-
-    const now = new Date();
-
-    container.innerHTML = _todayAttendanceList.map((a, idx) => {
-        const timeStr = a.time ? a.time.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
-        const st = studentMap[a.studentId];
-        const totalSessions = st ? (st.totalSessions || 10) : '?';
-        const curriculum = st?.curriculum || '';
-        const contractNumber = st?.contractNumber || '';
-        const isRecent = a.time && (now - a.time) < 20 * 60 * 1000; // trong 20 phút
-        const isSwimming = a.time && (now - a.time) < 60 * 60 * 1000; // trong 60 phút
-
-        const statusIcon = isRecent ? '🏊' : (isSwimming ? '🏊‍♂️' : '✅');
-        const statusText = isRecent ? 'Đang bơi' : (isSwimming ? 'Tại bể' : 'Xong');
-        const statusColor = isRecent ? '#3b82f6' : (isSwimming ? '#06b6d4' : '#10b981');
-        const bgColor = isRecent ? 'rgba(59,130,246,0.04)' : (idx === 0 ? 'rgba(6,182,212,0.02)' : 'transparent');
-
-        return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border-color); background:${bgColor}; gap:8px;">
-            <div style="flex:1; min-width:0;">
-                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                    <span style="font-weight:600; font-size:14px; color:var(--text-color);">${a.studentName}</span>
-                    <span style="font-size:11px; background:rgba(139,92,246,0.1); color:#8b5cf6; padding:1px 6px; border-radius:6px; font-weight:600;">Buổi ${a.sessionNumber}/${totalSessions}</span>
-                    ${curriculum ? `<span style="font-size:10px; color:var(--text-muted);">${curriculum}</span>` : ''}
-                </div>
-                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
-                    <i class="fa-solid fa-person-swimming" style="color:var(--primary);"></i> ${a.teacherName}
-                    ${contractNumber ? ` · HĐ: <strong>${contractNumber}</strong>` : ''}
-                    · <span style="font-size:10px;">${a.checkedByName}</span>
-                </div>
-            </div>
-            <div style="text-align:right; white-space:nowrap;">
-                <div style="font-weight:700; font-size:14px; color:var(--text-color);">${timeStr}</div>
-                <div style="font-size:10px; color:${statusColor}; font-weight:600;">${statusIcon} ${statusText}</div>
-            </div>
-        </div>`;
-    }).join('');
-};
 
 // ===================== LỄ TÂN - ĐIỂM DANH ===================== //
 
@@ -262,11 +157,6 @@ window.cancelAttendance = async function (studentId, studentName, attDocId, curr
         }
 
         alert(`✅ Đã huỷ buổi học cho "${studentName}" — còn ${actualCount} buổi.`);
-
-        // Xóa khỏi danh sách điểm danh hôm nay
-        const cancelIdx = _todayAttendanceList.findIndex(a => a.docId === attDocId || (a.studentId === studentId && a.sessionNumber === currentSessions));
-        if (cancelIdx >= 0) _todayAttendanceList.splice(cancelIdx, 1);
-        renderTodayAttendance();
 
         // Sync xoá cột điểm danh trên Google Sheet
         try {
@@ -457,18 +347,6 @@ window.markAttendance = async function (studentId, studentName, currentSessions,
         }
 
         alert(`✅ Đã điểm danh "${studentName}" — Buổi ${currentSessions + 1}/${totalSessions}\n🏊 Học tại bể: ${branchName}${expiryWarning}`);
-
-        // Push vào danh sách điểm danh hôm nay (0 reads!)
-        _todayAttendanceList.unshift({
-            docId: '',
-            studentId: studentId,
-            studentName: studentName,
-            teacherName: teacherName,
-            sessionNumber: currentSessions + 1,
-            checkedByName: currentUserDisplayName || 'Lễ tân',
-            time: new Date()
-        });
-        renderTodayAttendance();
 
         // Auto sync điểm danh lên Google Sheet (ghi vào cột "Buổi X")
         try {

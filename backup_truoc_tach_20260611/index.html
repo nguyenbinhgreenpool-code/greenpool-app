@@ -320,7 +320,7 @@
                             <p id="total-sales">0</p>
                         </div>
                     </div>
-                    <div class="stat-card" id="stat-new-today-card">
+                    <div class="stat-card">
                         <div class="stat-icon" style="background: rgba(139, 92, 246, 0.1); color: #8b5cf6;">
                             <i class="fa-solid fa-user-plus"></i>
                         </div>
@@ -382,7 +382,7 @@
                 </div>
 
                 <!-- Phân tích Nhân khẩu HV & Trend Hợp Đồng -->
-                <div id="dashboard-analytics-section" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
                     <!-- Phân tích Nhân khẩu -->
                     <div class="section-container" style="margin-bottom: 0;">
                         <div class="section-header">
@@ -1150,27 +1150,6 @@
                         </div>
                     </div>
 
-                    <!-- ✅ Điểm danh hôm nay (real-time local) -->
-                    <div class="section-container" style="margin-top: 15px;">
-                        <div class="section-header">
-                            <h3><i class="fa-solid fa-clock-rotate-left" style="color: #06b6d4;"></i> Điểm Danh Hôm Nay
-                            </h3>
-                            <p class="subtitle">Danh sách HV đã điểm danh hôm nay, mới nhất ở trên.</p>
-                        </div>
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                            <span id="letan-today-count" style="font-size:13px; font-weight:600; color:var(--primary);"></span>
-                            <button onclick="loadTodayAttendance()" 
-                                style="padding:6px 12px; border-radius:8px; border:1px solid var(--border-color); background:var(--card-bg); color:var(--text-muted); font-size:11px; cursor:pointer;">
-                                <i class="fa-solid fa-rotate"></i> Làm mới
-                            </button>
-                        </div>
-                        <div id="letan-today-attendance" style="max-height: 400px; overflow-y: auto;">
-                            <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">
-                                <i class="fa-solid fa-spinner fa-spin"></i> Đang tải...
-                            </div>
-                        </div>
-                    </div>
-
                     <!-- Bảng Quản Lý Điểm Danh -->
                     <div class="section-container" style="margin-top: 20px;">
                         <div class="section-header">
@@ -1346,7 +1325,7 @@
                                 <h3 style="margin:0; font-size:16px;">📊 Thống kê Nhân sự & HV</h3>
                                 <p class="subtitle" style="margin:4px 0 0; font-size:12px;">GV, Sale, HV tại từng cơ sở.</p>
                             </div>
-                            <div id="admin-sync-buttons" style="display:flex; gap:6px; flex-wrap:wrap;">
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
                                 <button onclick="event.stopPropagation(); syncAllStudentsToSheet()" class="btn btn-sm"
                                     style="background: rgba(34,197,94,0.15); color: #16a34a; border: 1px solid rgba(34,197,94,0.3); font-size: 11px; white-space: nowrap; padding: 5px 10px;">
                                     <i class="fa-solid fa-cloud-arrow-up"></i> Đồng bộ HV
@@ -1803,18 +1782,8 @@
                 }
             </script>
             <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
-            <!-- ===== Modular Architecture v11.0 ===== -->
-            <script src="js/modules/app-state.min.js?v=11.0"></script>
-            <script src="js/modules/app-utils.min.js?v=11.0"></script>
-            <script src="js/modules/app-sheet.min.js?v=11.0"></script>
-            <script src="js/modules/app-queue.min.js?v=11.0"></script>
-            <script src="js/modules/app-dashboard.min.js?v=11.0"></script>
-            <script src="js/modules/app-auth.min.js?v=11.0"></script>
-            <script src="js/modules/app-notify.min.js?v=11.0"></script>
-            <script src="js/modules/app-waiver.min.js?v=11.0"></script>
-            <script src="js/modules/app-admin.min.js?v=11.0"></script>
-            <script src="js/modules/app-finance.min.js?v=11.0"></script>
-            <script src="js/modules/app-init.min.js?v=11.0"></script>
+            <script src="js/app-common.min.js?v=7.9"></script>
+            <script src="app.min.js?v=10.5"></script>
             <script src="js/clb.min.js?v=3.0"></script>
             <script src="js/customer.min.js?v=7.3"></script>
             <script src="js/teacher.min.js?v=8.2"></script>

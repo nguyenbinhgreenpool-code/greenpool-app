@@ -1,0 +1,115 @@
+[
+  {
+    "sub": 27317,
+    "pid": 21385,
+    "site": 2,
+    "paid": 2400000,
+    "total": 3000000,
+    "disc": "GIAM20%",
+    "sale": 64,
+    "name": "ĐẶNG HÀ LINH"
+  },
+  {
+    "sub": 27314,
+    "pid": 21383,
+    "site": 2,
+    "paid": 3200000,
+    "total": 4000000,
+    "disc": "GIAM20%",
+    "sale": 64,
+    "name": "NGUYỄN THUỲ VÂN"
+  },
+  {
+    "sub": 27302,
+    "pid": 21373,
+    "site": 2,
+    "paid": 2800000,
+    "total": 3500000,
+    "disc": "GIAM700K",
+    "sale": 64,
+    "name": "NGUYỄN NGỌC HÂN"
+  },
+  {
+    "sub": 27301,
+    "pid": 21372,
+    "site": 2,
+    "paid": 2400000,
+    "total": 3000000,
+    "disc": "GIAM600K",
+    "sale": 64,
+    "name": "NGUYỄN NGỌC DIỆU"
+  },
+  {
+    "sub": 27293,
+    "pid": 21366,
+    "site": 2,
+    "paid": 2560000,
+    "total": 3200000,
+    "disc": "GIAM20%",
+    "sale": 4199,
+    "name": "PHẠM MINH QUANG",
+    "package_id": 454,
+    "package_name": "HỌC BƠI ẾCH (TRẺ EM)",
+    "contract": "3452"
+  },
+  {
+    "sub": 27292,
+    "pid": 21365,
+    "site": 1,
+    "paid": 2975000,
+    "total": 3500000,
+    "disc": "GIAM15%",
+    "sale": 4224,
+    "name": "ĐÀO THỊ NHUNG"
+  },
+  {
+    "sub": 27287,
+    "pid": 21360,
+    "site": 5,
+    "paid": 2400000,
+    "total": 3000000,
+    "disc": "GIAM20%",
+    "sale": 4239,
+    "name": "PHẠM QUANG ANH"
+  },
+  {
+    "sub": 27278,
+    "pid": 21354,
+    "site": 1,
+    "paid": 2550000,
+    "total": 3000000,
+    "disc": "VCG15",
+    "sale": 4204,
+    "name": "TRẦN NGỌC ANH KHUÊ"
+  },
+  {
+    "sub": 27154,
+    "pid": 16925,
+    "site": 2,
+    "paid": 2400000,
+    "total": 3000000,
+    "disc": "20%",
+    "sale": 4199,
+    "name": "Vũ Hải Hà"
+  },
+  {
+    "sub": 27150,
+    "pid": 16925,
+    "site": 2,
+    "paid": 2500000,
+    "total": 3000000,
+    "disc": "500000",
+    "sale": 4199,
+    "name": "Vũ Hải Hà"
+  },
+  {
+    "sub": 27149,
+    "pid": 16925,
+    "site": 2,
+    "paid": 2500000,
+    "total": 3000000,
+    "disc": "None",
+    "sale": 4199,
+    "name": "Vũ Hải Hà"
+  }
+]

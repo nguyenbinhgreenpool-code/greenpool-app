@@ -617,8 +617,6 @@ const GP_API = {
     },
     // Cache sale mapping (phone → greenpool user_id)
     saleCache: {},
-    // Cache discount codes per site
-    discountCache: {},
     // Mapping App branchId → GP site_id
     siteMap: {
         'branch_nguyen_co_thach': 1,   // 24 Nguyễn Cơ Thạch
@@ -628,21 +626,6 @@ const GP_API = {
         'branch_thanh_tri': 5           // Thanh Trì
     }
 };
-
-// Lấy danh sách mã giảm giá từ GP cho site hiện tại
-async function gpLoadDiscounts(siteId) {
-    if (GP_API.discountCache[siteId]) return GP_API.discountCache[siteId];
-    try {
-        const res = await gpFetch(`discount?filter[site_id]=${siteId}&size=50`);
-        const discounts = res?.data || res || [];
-        if (Array.isArray(discounts) && discounts.length > 0) {
-            GP_API.discountCache[siteId] = discounts;
-            console.log(`✅ [GP] Loaded ${discounts.length} discounts for site ${siteId}`);
-            return discounts;
-        }
-    } catch (e) { console.warn('[GP] Load discounts failed:', e.message); }
-    return [];
-}
 
 // Lấy token (tự động refresh nếu hết hạn)
 async function gpLogin() {
@@ -717,7 +700,6 @@ async function gpFindOrCreatePerson(name, phone, gender) {
 }
 
 // Tìm sale trên GreenPool bằng tên hoặc SĐT → trả full object {id, phone, fullname}
-// ƯU TIÊN: (1) SĐT cùng site → (2) TÊN cùng site → (3) SĐT cross-site (có cảnh báo)
 async function gpFindSale(saleName, salePhone) {
     const gpSiteId = GP_API.siteMap[currentBranchId] || 2;
     const cacheKey = `${gpSiteId}_${salePhone || saleName || ''}`;
@@ -729,63 +711,60 @@ async function gpFindSale(saleName, salePhone) {
 
     // Lọc theo site_id trước (ưu tiên Sale cùng cơ sở)
     const sameSite = res.filter(u => u.site_id === gpSiteId);
-    const searchList = sameSite.length > 0 ? sameSite : res;
+    const searchList = sameSite.length > 0 ? sameSite : res; // fallback all nếu site rỗng
 
-    // BƯỚC 1: Tìm SĐT CÙNG SITE (chính xác nhất)
+    // Tìm theo SĐT trước (chính xác nhất)
     if (salePhone) {
         const byPhone = searchList.find(u => u.phone === salePhone);
         if (byPhone) {
             const obj = { id: byPhone.id, phone: byPhone.phone, fullname: byPhone.fullname };
             GP_API.saleCache[cacheKey] = obj;
-            console.log(`✅ [GP] Match Sale by phone (same-site): ${salePhone} → "${byPhone.fullname}" (site:${byPhone.site_id})`);
+            console.log(`✅ [GP] Match Sale by phone: ${salePhone} → "${byPhone.fullname}" (site:${byPhone.site_id})`);
+            return obj;
+        }
+        // Fallback: tìm tất cả site nếu cùng site không có
+        const byPhoneAll = res.find(u => u.phone === salePhone);
+        if (byPhoneAll) {
+            const obj = { id: byPhoneAll.id, phone: byPhoneAll.phone, fullname: byPhoneAll.fullname };
+            GP_API.saleCache[cacheKey] = obj;
+            console.log(`✅ [GP] Match Sale by phone (cross-site): ${salePhone} → "${byPhoneAll.fullname}" (site:${byPhoneAll.site_id})`);
             return obj;
         }
     }
 
-    // BƯỚC 2: Tìm TÊN CÙNG SITE (ưu tiên hơn cross-site phone)
+    // Tìm theo tên (chỉ trong cùng site)
     if (saleName) {
         const nameUpper = saleName.toUpperCase().trim();
         const ignoreWords = ['SALE', 'ADMIN', 'MANAGER', 'CHUYÊN', 'VIÊN', 'NHÂN'];
         const keywords = nameUpper.split(/\s+/).filter(w => w.length >= 2 && !ignoreWords.includes(w));
         console.log(`🔍 [GP] Matching Sale: "${saleName}" → keywords: [${keywords.join(', ')}] (site:${gpSiteId})`);
         
-        // Exact match cùng site
+        // Ưu tiên exact match cùng site
         const candidates = [];
         for (const u of searchList) {
             const gpName = (u.fullname || '').toUpperCase();
             if (keywords.length > 0 && keywords.every(kw => gpName.includes(kw))) candidates.push(u);
         }
+        
         if (candidates.length >= 1) {
             const pick = candidates[0];
             const obj = { id: pick.id, phone: pick.phone, fullname: pick.fullname };
             GP_API.saleCache[cacheKey] = obj;
-            console.log(`✅ [GP] Match Sale by name (same-site): "${saleName}" → "${pick.fullname}" (ID:${pick.id}, site:${pick.site_id})`);
+            console.log(`✅ [GP] Match Sale: "${saleName}" → "${pick.fullname}" (ID:${pick.id}, site:${pick.site_id})`);
             return obj;
         }
         
-        // Partial match cùng site
+        // Fallback: partial match cùng site
         for (const u of searchList) {
             const gpName = (u.fullname || '').toUpperCase();
             if (keywords.some(kw => gpName.includes(kw))) {
                 const obj = { id: u.id, phone: u.phone, fullname: u.fullname };
                 GP_API.saleCache[cacheKey] = obj;
-                console.log(`✅ [GP] Match Sale by name (partial, same-site): "${saleName}" → "${u.fullname}" (ID:${u.id}, site:${u.site_id})`);
+                console.log(`✅ [GP] Match Sale (partial): "${saleName}" → "${u.fullname}" (ID:${u.id}, site:${u.site_id})`);
                 return obj;
             }
         }
     }
-
-    // BƯỚC 3: Cross-site phone (cuối cùng, có cảnh báo)
-    if (salePhone) {
-        const byPhoneAll = res.find(u => u.phone === salePhone);
-        if (byPhoneAll) {
-            console.warn(`⚠️ [GP] Match Sale by phone CROSS-SITE: ${salePhone} → "${byPhoneAll.fullname}" (site:${byPhoneAll.site_id}) ≠ target site ${gpSiteId}! Có thể sai Sale.`);
-            const obj = { id: byPhoneAll.id, phone: byPhoneAll.phone, fullname: byPhoneAll.fullname };
-            GP_API.saleCache[cacheKey] = obj;
-            return obj;
-        }
-    }
-
     console.warn(`⚠️ [GP] Không match Sale nào cho "${saleName}" tại site ${gpSiteId}`);
     return null;
 }
@@ -921,13 +900,8 @@ async function syncToGreenPool(studentData) {
                     const adminSnap = await db.collection('users').where('role', '==', 'ADMIN').get();
                     const warnP = [];
                     adminSnap.forEach(doc => { warnP.push(sendNotification(doc.id, 'system', warnMsg)); });
-                    // Gửi cả cho Sale hiện tại biết
-                    const currentUid = firebase.auth().currentUser?.uid;
-                    if (currentUid) {
-                        warnP.push(sendNotification(currentUid, 'system', warnMsg));
-                    }
                     await Promise.all(warnP);
-                } catch (e) { console.warn('[GP] Lỗi gửi cảnh báo:', e); }
+                } catch (e) { console.warn('[GP] Lỗi gửi cảnh báo Admin:', e); }
             }
         }
 
@@ -942,29 +916,36 @@ async function syncToGreenPool(studentData) {
         const gpGender = (gender === 'Nữ' || gender === 'female') ? 2 : 1;
 
         const proxyPayload = {
+            salePhone: finalSalePhone,
             branchId: currentBranchId,
+            customerSource: customerSource || 'FACE',
             personInfo: {
                 fullname: name.toUpperCase(),
                 phone: phone,
                 gender: gpGender,
-                address: 'Hà Nội'
+                address: 'Hà Nội',
+                mkt_source: customerSource || 'FACE',
+                mkt_channel: customerSource || 'FACE'
             },
             subscribeInfo: {
                 package_id: packageId,
                 contract: contractNumber || '',
                 start_date: today,
-                active_type: 'FIRST_USE',
+                active_type: 'FUTURE',
                 support_user_id: saleGpId,
                 site_id: gpSiteId
             },
             paymentInfo: {
-                total_amount: originalAmount || paidAmount,
+                total_amount: paidAmount,
+                remain_amount: 0,
                 site_id: gpSiteId,
+                mkt_source: customerSource || 'FACE',
                 pay_method: payMethod,
                 pay_amount: paidAmount,
-                discount_code: discountCode || undefined
-            },
-            customerSource: customerSource || 'FACE'
+                support_user_id: saleGpId,
+                discount_type: discountCode ? 'code' : undefined,
+                discount_value: discountCode || undefined
+            }
         };
         console.log('📤 [GP] Proxy payload:', JSON.stringify(proxyPayload));
 
@@ -1044,7 +1025,7 @@ window.resyncFailedGP = async function () {
                 name: s.name, phone: s.phone, gender: s.gender || '',
                 curriculum: s.curriculum || 'Bơi Ếch',
                 contractNumber: s.contractNumber,
-                paymentInfo: { totalAmount: s.totalAmount || '0', paidAmount: s.paidAmount || '0', payMethod: s.payMethod || 'cash', discountCode: s.discountCode || '' },
+                paymentInfo: { totalAmount: s.totalAmount || '0', paidAmount: s.paidAmount || '0', payMethod: 'cash' },
                 ageCategory: s.ageCategory || '',
                 customerSource: s.customerSource || 'FACE',
                 _overrideSale: originalSale
@@ -2243,11 +2224,6 @@ window.saleAssignStudent = async function (name, phone, gender, ageCategory, con
             isTestStudent: isTestStudent || false,
             isFullyCompleted: false,
             sheetSyncedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            // Lưu thông tin thanh toán + mã giảm giá để resync/refix
-            totalAmount: paymentInfo.totalAmount || '',
-            paidAmount: paymentInfo.paidAmount || '',
-            discountCode: paymentInfo.discountCode || '',
-            payMethod: paymentInfo.payMethod || 'cash',
             ...(isUpgrade ? { isUpgrade: true, upgradeFromStudentId: upgradeFromId } : {})
         });
 
@@ -3602,26 +3578,21 @@ document.addEventListener('DOMContentLoaded', () => {
         el.value = raw.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
     };
 
-    // Tính giảm giá từ dropdown mã GP
+    // Tính giảm giá tự động: GIAM500K hoặc GIAM20%
     window.calcDiscount = function(idx) {
         const totalEl = document.getElementById(`sale-student-total-${idx}`);
         const paidEl = document.getElementById(`sale-student-paid-${idx}`);
         const discountEl = document.getElementById(`sale-student-discount-${idx}`);
-        const customEl = document.getElementById(`sale-student-discount-custom-${idx}`);
         const previewEl = document.getElementById(`sale-discount-preview-${idx}`);
-        if (!totalEl || !paidEl) return;
+        if (!totalEl || !paidEl || !discountEl) return;
 
         const totalRaw = parseInt(totalEl.value.replace(/\./g, '')) || 0;
-
-        // Ưu tiên: ô nhập tay > dropdown
-        const customCode = (customEl?.value || '').trim().toUpperCase();
-        const dropdownCode = discountEl?.value?.trim() || '';
-        const selectedOpt = discountEl?.selectedOptions?.[0];
-        const code = customCode || dropdownCode;
+        const code = discountEl.value.trim().toUpperCase();
 
         if (!totalRaw || !code) {
             if (previewEl) previewEl.style.display = 'none';
             if (!code && totalRaw) {
+                // Không có mã → thanh toán = tổng tiền
                 paidEl.value = String(totalRaw).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
             }
             return;
@@ -3630,42 +3601,31 @@ document.addEventListener('DOMContentLoaded', () => {
         let discountAmount = 0;
         let discountLabel = '';
 
-        // 1. Nếu từ dropdown → dùng data attributes
-        if (!customCode && dropdownCode) {
-            const discType = selectedOpt?.dataset?.type || '';
-            const discValue = parseInt(selectedOpt?.dataset?.value) || 0;
-            if (discType === 'percent' && discValue > 0) {
-                discountAmount = Math.round(totalRaw * discValue / 100);
-                discountLabel = discValue + '% = ' + discountAmount.toLocaleString('vi-VN') + 'đ';
-            } else if (discType === 'fixed' && discValue > 0) {
-                discountAmount = discValue;
+        // Mã đặc biệt: COMBO HB → giảm cố định 1.000.000đ
+        const specialCodes = {
+            'COMBO HB': 1000000
+        };
+        if (specialCodes[code]) {
+            discountAmount = specialCodes[code];
+            discountLabel = discountAmount.toLocaleString('vi-VN') + 'đ';
+        }
+
+        // Dạng 1: GIAM500K, GIAM1500K, etc.
+        if (!discountAmount) {
+            const matchK = code.match(/^GIAM(\d+)K$/);
+            if (matchK) {
+                discountAmount = parseInt(matchK[1]) * 1000;
                 discountLabel = discountAmount.toLocaleString('vi-VN') + 'đ';
             }
         }
 
-        // 2. Parse từ mã nhập tay: GIAM500K, GIAM20%, 500K, 200K...
-        if (!discountAmount && code) {
-            const matchK = code.match(/^GIAM(\d+)K$/i);
-            const matchP = code.match(/^GIAM(\d+)%?$/i);
-            const matchShortK = code.match(/^(\d+)K$/i);  // Sale nhập tắt: "500K", "200K"
-            if (matchK) {
-                discountAmount = parseInt(matchK[1]) * 1000;
-                discountLabel = discountAmount.toLocaleString('vi-VN') + 'đ';
-            } else if (matchShortK) {
-                // Auto-normalize: "500K" → "GIAM500K"
-                const amtK = parseInt(matchShortK[1]);
-                discountAmount = amtK * 1000;
-                discountLabel = discountAmount.toLocaleString('vi-VN') + 'đ';
-                // Tự sửa ô nhập thành format chuẩn
-                if (customEl && customCode) {
-                    customEl.value = `GIAM${amtK}K`;
-                }
-            } else if (matchP && !matchK) {
-                const p = parseInt(matchP[1]);
-                if (p <= 100) {
-                    discountAmount = Math.round(totalRaw * p / 100);
-                    discountLabel = p + '% = ' + discountAmount.toLocaleString('vi-VN') + 'đ';
-                }
+        // Dạng 2: GIAM20%, GIAM5%, etc.
+        if (!discountAmount) {
+            const matchP = code.match(/^GIAM(\d+)%$/);
+            if (matchP) {
+                const pct = parseInt(matchP[1]);
+                discountAmount = Math.round(totalRaw * pct / 100);
+                discountLabel = pct + '% = ' + discountAmount.toLocaleString('vi-VN') + 'đ';
             }
         }
 
@@ -3676,9 +3636,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 previewEl.style.display = 'block';
                 previewEl.innerHTML = '<i class="fa-solid fa-tag"></i> Giảm: <b>' + discountLabel + '</b> → Thanh toán: <b>' + paid.toLocaleString('vi-VN') + 'đ</b>';
             }
-        } else {
-            if (previewEl) previewEl.style.display = 'none';
-            if (totalRaw) paidEl.value = String(totalRaw).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+        } else if (code && !specialCodes[code]) {
+            // Mã không hợp lệ
+            if (previewEl) {
+                previewEl.style.display = 'block';
+                previewEl.innerHTML = '⚠️ Mã không đúng định dạng (VD: GIAM500K, GIAM20%, COMBO HB)';
+            }
         }
     };
 
@@ -3817,10 +3780,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         <div class="form-group flex-1">
                             <label>Mã giảm giá</label>
-                            <select id="sale-student-discount-${i}" class="modern-select" style="padding:8px 10px;" onchange="document.getElementById('sale-student-discount-custom-${i}').value=''; calcDiscount(${i})">
-                                <option value="">-- Không giảm giá --</option>
-                            </select>
-                            <input type="text" id="sale-student-discount-custom-${i}" placeholder="Hoặc nhập: GIAM500K" style="margin-top:4px; padding:6px 10px; font-size:12px; border:1px dashed var(--border-color); border-radius:6px;" oninput="if(this.value.trim()){document.getElementById('sale-student-discount-${i}').value='';} calcDiscount(${i})">
+                            <input type="text" id="sale-student-discount-${i}" placeholder="GIAM500K / GIAM20%" style="padding:8px 10px; text-transform:uppercase;" oninput="this.value=this.value.toUpperCase(); calcDiscount(${i})">
                         </div>
                     </div>
                     <div id="sale-discount-preview-${i}" style="display:none; padding:6px 10px; margin-bottom:8px; border-radius:8px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.15); font-size:12px; color:#ef4444;"></div>
@@ -3862,95 +3822,6 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>`;
         }
         container.innerHTML = html;
-
-        // Populate discount dropdowns — mã giảm theo CƠ SỞ (chỉ hiện mã CÓ trên GP)
-        (() => {
-            // Mã % chuẩn (có trên GP tất cả site TRỪ Thanh Trì)
-            const pctDiscounts = [
-                { label: 'Giảm 10%', code: 'GIAM10', type: 'percent', value: 10 },
-                { label: 'Giảm 15%', code: 'GIAM15', type: 'percent', value: 15 },
-                { label: 'Giảm 20%', code: 'GIAM20', type: 'percent', value: 20 },
-                { label: 'Giảm 25%', code: 'GIAM25', type: 'percent', value: 25 },
-                { label: 'Giảm 30%', code: 'GIAM30', type: 'percent', value: 30 },
-                { label: 'Giảm 40%', code: 'GIAM40', type: 'percent', value: 40 },
-                { label: 'Giảm 50%', code: 'GIAM50', type: 'percent', value: 50 },
-            ];
-
-            // Mã số tiền cố định THEO CƠ SỞ (đúng mã có trên GP)
-            const fixedByBranch = {
-                'branch_nguyen_co_thach': [
-                    { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
-                    { label: 'Giảm 800K', code: 'GIAM800K', type: 'fixed', value: 800000 },
-                    { label: 'Giảm 900K', code: 'GIAM900K', type: 'fixed', value: 900000 },
-                    { label: 'Giảm 1.200K', code: 'GIAM1200K', type: 'fixed', value: 1200000 },
-                ],
-                'branch_cung_ttdn': [
-                    { label: 'Giảm 200K', code: 'GIAM200K', type: 'fixed', value: 200000 },
-                    { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
-                    { label: 'Giảm 600K', code: 'GIAM600K', type: 'fixed', value: 600000 },
-                    { label: 'Giảm 700K', code: 'GIAM700K', type: 'fixed', value: 700000 },
-                    { label: 'Giảm 800K', code: 'GIAM800K', type: 'fixed', value: 800000 },
-                    { label: 'Giảm 900K', code: 'GIAM900K', type: 'fixed', value: 900000 },
-                    { label: 'Giảm 1.000K', code: 'GIAM1000K', type: 'fixed', value: 1000000 },
-                    { label: 'Giảm 1.200K', code: 'GIAM1200K', type: 'fixed', value: 1200000 },
-                    { label: 'Giảm 1.500K', code: 'GIAM1500K', type: 'fixed', value: 1500000 },
-                ],
-                'branch_thuy_khue': [
-                    { label: 'Giảm 900K', code: 'GIAM900K', type: 'fixed', value: 900000 },
-                    { label: 'Giảm 1.200K', code: 'GIAM1200K', type: 'fixed', value: 1200000 },
-                ],
-                'branch_hoang_mai': [
-                    { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
-                    { label: 'Giảm 800K', code: 'GIAM800K', type: 'fixed', value: 800000 },
-                    { label: 'Giảm 900K', code: 'GIAM900K', type: 'fixed', value: 900000 },
-                    { label: 'Giảm 1.200K', code: 'GIAM1200K', type: 'fixed', value: 1200000 },
-                ],
-                'branch_thanh_tri': [
-                    { label: 'Giảm 200K', code: 'GIAM200K', type: 'fixed', value: 200000 },
-                    { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
-                    { label: 'Giảm 1.000K', code: 'GIAM1000K', type: 'fixed', value: 1000000 },
-                ],
-            };
-
-            // Tất cả cơ sở đều có mã % trên GP (NCT, CTT, TK, HM=_TT, TT=_TTRI)
-            const noPercentBranches = [];
-            const branchFixed = fixedByBranch[currentBranchId] || [];
-
-            for (let i = 1; i <= n; i++) {
-                const sel = document.getElementById(`sale-student-discount-${i}`);
-                if (!sel) continue;
-
-                // Mã %
-                if (!noPercentBranches.includes(currentBranchId)) {
-                    const grpPct = document.createElement('optgroup');
-                    grpPct.label = '── Giảm % ──';
-                    pctDiscounts.forEach(d => {
-                        const opt = document.createElement('option');
-                        opt.value = d.code;
-                        opt.textContent = d.label;
-                        opt.dataset.type = d.type;
-                        opt.dataset.value = d.value;
-                        grpPct.appendChild(opt);
-                    });
-                    sel.appendChild(grpPct);
-                }
-
-                // Mã số tiền
-                if (branchFixed.length > 0) {
-                    const grpFixed = document.createElement('optgroup');
-                    grpFixed.label = '── Giảm số tiền ──';
-                    branchFixed.forEach(d => {
-                        const opt = document.createElement('option');
-                        opt.value = d.code;
-                        opt.textContent = d.label;
-                        opt.dataset.type = d.type;
-                        opt.dataset.value = d.value;
-                        grpFixed.appendChild(opt);
-                    });
-                    sel.appendChild(grpFixed);
-                }
-            }
-        })();
     };
 
     window.showSaleTab = function (idx) {
@@ -4041,19 +3912,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     const selfTotalSessions = DIVING_CURRICULUMS[curriculum] || ((curriculum === 'Ếch Vip' || curriculum === 'Sải Vip') ? 15 : (curriculum === 'PT' ? (parseInt(ptSessions) || 10) : 10));
                     const isTestStudent = document.getElementById('sale-student-test-1')?.checked || false;
-                    const selfPaymentInfoForSave = {
-                        totalAmount: (document.getElementById('sale-student-total-1')?.value || '0').replace(/\./g, ''),
-                        paidAmount: (document.getElementById('sale-student-paid-1')?.value || '').replace(/\./g, ''),
-                        discountCode: (document.getElementById('sale-student-discount-custom-1')?.value || '').trim().toUpperCase() || document.getElementById('sale-student-discount-1')?.value || ''
-                    };
-                    // ❌ CHẶN: Đóng tiền < Tổng mà KHÔNG chọn mã giảm → KHÔNG CHO LƯU
-                    const sfTotal = parseInt(selfPaymentInfoForSave.totalAmount) || 0;
-                    const sfPaid = parseInt(selfPaymentInfoForSave.paidAmount) || 0;
-                    if (sfTotal > 0 && sfPaid > 0 && sfPaid < sfTotal && !selfPaymentInfoForSave.discountCode) {
-                        const sfDiff = (sfTotal - sfPaid).toLocaleString('vi-VN');
-                        alert(`❌ Thanh toán ${sfPaid.toLocaleString('vi-VN')}đ < Tổng ${sfTotal.toLocaleString('vi-VN')}đ nhưng CHƯA CHỌN MÃ GIẢM GIÁ!\n\n→ GP sẽ ghi nợ ${sfDiff}đ!\n\nVui lòng chọn mã giảm giá từ dropdown hoặc nhập GIAM500K trước khi lưu.`);
-                        return;
-                    }
                     await db.collection('students').add({
                         name, phone, gender, ageCategory, age: age || 0, assignedTeacherId: teacherId,
                         contractNumber: contractNumber || 'Chưa có',
@@ -4065,12 +3923,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         isFullyCompleted: false,
                         selfRecruitReason: selfRecruitReason,
                         sheetSyncedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                        // Lưu thông tin thanh toán + mã giảm giá để resync/refix
-                        totalAmount: selfPaymentInfoForSave.totalAmount || '',
-                        paidAmount: selfPaymentInfoForSave.paidAmount || '',
-                        discountCode: selfPaymentInfoForSave.discountCode || '',
-                        payMethod: document.getElementById('sale-student-paymethod-1')?.value || 'cash'
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
 
                     // Auto sync lên Google Sheet
@@ -4098,7 +3951,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             totalAmount: (document.getElementById('sale-student-total-1')?.value || '0').replace(/\./g, ''),
                             paidAmount: (document.getElementById('sale-student-paid-1')?.value || '').replace(/\./g, ''),
                             payMethod: document.getElementById('sale-student-paymethod-1')?.value || 'cash',
-                            discountCode: (document.getElementById('sale-student-discount-custom-1')?.value || '').trim().toUpperCase() || document.getElementById('sale-student-discount-1')?.value || ''
+                            discountCode: document.getElementById('sale-student-discount-1')?.value || ''
                         };
                         console.log('🔄 [GP] Bắt đầu đồng bộ tự tuyển:', { name, phone, rawCurriculum, contractNumber });
                         const gpResult = await syncToGreenPool({
@@ -4197,16 +4050,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         showSaleTab(i);
                         return alert(`❌ HV ${i}: Vui lòng nhập Số điện thoại!`);
                     }
-                    // ❌ CHẶN: Đóng tiền < Tổng mà KHÔNG chọn mã giảm → KHÔNG CHO LƯU
-                    const chkTotal = parseInt((document.getElementById(`sale-student-total-${i}`)?.value || '0').replace(/\./g, '')) || 0;
-                    const chkPaid = parseInt((document.getElementById(`sale-student-paid-${i}`)?.value || '0').replace(/\./g, '')) || 0;
-                    const chkDiscount = (document.getElementById(`sale-student-discount-custom-${i}`)?.value || '').trim() || document.getElementById(`sale-student-discount-${i}`)?.value || '';
-                    if (chkTotal > 0 && chkPaid > 0 && chkPaid < chkTotal && !chkDiscount) {
-                        showSaleTab(i);
-                        const diff = (chkTotal - chkPaid).toLocaleString('vi-VN');
-                        alert(`❌ HV ${i} (${name}): Thanh toán ${chkPaid.toLocaleString('vi-VN')}đ < Tổng ${chkTotal.toLocaleString('vi-VN')}đ nhưng CHƯA CHỌN MÃ GIẢM GIÁ!\n\n→ GP sẽ ghi nợ ${diff}đ!\n\nVui lòng chọn mã giảm giá từ dropdown hoặc nhập GIAM500K trước khi lưu.`);
-                        return;
-                    }
                 }
 
                 // Submit all students
@@ -4241,7 +4084,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         totalAmount: (document.getElementById(`sale-student-total-${i}`)?.value || '0').replace(/\./g, ''),
                         paidAmount: (document.getElementById(`sale-student-paid-${i}`)?.value || '').replace(/\./g, ''),
                         payMethod: document.getElementById(`sale-student-paymethod-${i}`)?.value || 'cash',
-                        discountCode: (document.getElementById(`sale-student-discount-custom-${i}`)?.value || '').trim().toUpperCase() || document.getElementById(`sale-student-discount-${i}`)?.value || ''
+                        discountCode: document.getElementById(`sale-student-discount-${i}`)?.value || ''
                     };
                     await saleAssignStudent(name, phone, gender, ageCategory, contractNumber, finalTeacherId, curriculum, ptSessions, isExceptionForThisStudent, age, isTest, isDiving, skipQueue, paymentInfo, rawCurriculum);
                 }
@@ -4440,22 +4283,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 }); // Đóng DOMContentLoaded 
-
-// === ONE-TIME FIX: Link JMG2551 + JMG2552 (discount fix) ===
-firebase.auth().onAuthStateChanged(async (user) => {
-    if (!user) return;
-    const fixes = [
-        { contractNumber: 'JMG2551', branchId: 'branch_nguyen_co_thach', gpSubscribeId: 35318, gpPersonId: 26519 },
-        { contractNumber: 'JMG2552', branchId: 'branch_nguyen_co_thach', gpSubscribeId: 35319, gpPersonId: 26520 }
-    ];
-    for (const f of fixes) {
-        try {
-            const r = await firebase.functions().httpsCallable('gpResetSync')({ ...f, action: 'update' });
-            console.log(`✅ [AUTO-FIX] ${f.contractNumber}:`, r.data?.message);
-        } catch (e) { console.warn(`[AUTO-FIX] ${f.contractNumber}:`, e.message); }
-    }
-});
-// === END ONE-TIME FIX ===
 
 // ===================== KHỞI TẠO CƠ SỞ (BRANCH_LOGIC) ===================== //
 

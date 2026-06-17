@@ -29,6 +29,7 @@ service cloud.firestore {
     }
 
     // ===== STUDENTS (HV Cơ bản) =====
+    // read: bất kỳ ai đã auth (kể cả anonymous - dùng cho sync từ coachtl)
     match /students/{id} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE'];
@@ -102,6 +103,12 @@ service cloud.firestore {
       allow create: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'SALE', 'KETOAN', 'TEACHER'];
       allow update: if isAdmin();
       allow delete: if isAdmin();
+    }
+
+    // ===== SETTINGS (Cấu hình hệ thống: mở/đóng chốt lương...) =====
+    match /settings/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && getUserRole() in ['ADMIN', 'MANAGER', 'KETOAN'];
     }
 
     // ===== BRANCHES =====

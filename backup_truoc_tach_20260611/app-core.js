@@ -3,15 +3,15 @@
 
 // ===================== STATE KHAI BÁO & FIREBASE ===================== //
 // 'db' đã được khởi tạo ở index.html thông qua Firebase CDN
-let auth = null;
-let currentBranchId = null;
-let currentUserId = null;
-let currentUserRole = null;
-let currentUserBranchId = null;
-let currentUserDisplayName = null;
-let isLoginMode = true;
+var auth = null;
+var currentBranchId = null;
+var currentUserId = null;
+var currentUserRole = null;
+var currentUserBranchId = null;
+var currentUserDisplayName = null;
+var isLoginMode = true;
 
-let localState = {
+var localState = {
     branches: [],
     teachers: [], // Các giáo viên thuộc cơ sở hiện tại (Lấy từ Users)
     sales: [],    // Các Sale thuộc cơ sở hiện tại (Lấy từ Users)
@@ -39,9 +39,9 @@ function isDivingCurriculum(cur) {
 }
 
 // ===================== BỘ LỌC THỜI GIAN ===================== //
-let dateFilterMode = 'all'; // 'all' | 'today' | '7d' | '30d' | 'custom'
-let dateFilterFrom = null;
-let dateFilterTo = null;
+var dateFilterMode = 'all'; // 'all' | 'today' | '7d' | '30d' | 'custom'
+var dateFilterFrom = null;
+var dateFilterTo = null;
 
 // Lọc danh sách theo thời gian đăng ký (createdAt)
 function filterByDate(items) {
@@ -123,7 +123,7 @@ function renderDateFilterBar() {
 }
 
 // Các hàm Unsubscribe (Để dọn dẹp realtime listener khi chuyển branch)
-let unsubs = [];
+var unsubs = [];
 
 // ===================== GOOGLE SHEET AUTO SYNC ===================== //
 // Dán URL Web App từ Google Apps Script vào đây sau khi deploy
@@ -160,8 +160,8 @@ async function syncClbRowToSheet(data) {
 }
 
 // Đồng bộ từng cơ sở vào tab riêng trong Google Sheet
-let _isSyncing = false;
-let _syncAbort = false;
+var _isSyncing = false;
+var _syncAbort = false;
 
 window.stopSyncSheet = function () {
     if (_isSyncing) {
@@ -274,8 +274,8 @@ window.syncAllStudentsToSheet = async function () {
 };
 
 // ========== ĐỒNG BỘ LỊCH SỬ ĐIỂM DANH LÊN GOOGLE SHEET ========== //
-let _isAttSyncing = false;
-let _attSyncAbort = false;
+var _isAttSyncing = false;
+var _attSyncAbort = false;
 
 window.stopAttSync = function () {
     if (_isAttSyncing) { _attSyncAbort = true; alert('⏹️ Đang dừng...'); }
@@ -396,8 +396,8 @@ window.syncAttendanceToSheet = async function () {
 };
 
 // ========== ĐỒNG BỘ VĐV CLB KID TL RA GOOGLE SHEET ========== //
-let _isClbSyncing = false;
-let _clbSyncAbort = false;
+var _isClbSyncing = false;
+var _clbSyncAbort = false;
 
 window.stopClbSync = function () {
     if (_isClbSyncing) {
@@ -617,6 +617,7 @@ async function renderLivePool() {
 
         const snap = await db.collection('attendance')
             .where('branchId', '==', currentBranchId)
+            .where('createdAt', '>=', sixtyMinAgo)
             .get();
 
         // Filter trong JS để tránh cần composite index
@@ -676,24 +677,22 @@ async function renderLivePool() {
             </div>
         </div>`;
 
-        // Build sale name lookup bằng query trực tiếp studentId
+        // Dùng localState thay vì query từng student doc (tiết kiệm reads!)
         const studentSaleMap = {};
+        const allStudents = localState.students || [];
         const studentIds = [...new Set(uniqueRecords.map(r => r.studentId).filter(Boolean))];
-        for (const sid of studentIds) {
-            try {
-                const sDoc = await db.collection('students').doc(sid).get();
-                if (sDoc.exists) {
-                    const sd = sDoc.data();
-                    let saleName = sd.creatorName || '';
-                    // Nếu không có creatorName → tra creatorId trong users
-                    if (!saleName && sd.creatorId) {
-                        const uDoc = await db.collection('users').doc(sd.creatorId).get();
-                        if (uDoc.exists) saleName = uDoc.data().name || '';
-                    }
-                    if (saleName) studentSaleMap[sid] = saleName;
+        studentIds.forEach(sid => {
+            const stu = allStudents.find(s => s.id === sid);
+            if (stu) {
+                let saleName = stu.creatorName || '';
+                if (!saleName && stu.creatorId) {
+                    const allUsers = [...(localState.teachers || []), ...(localState.sales || []), ...(localState.firedUsers || [])];
+                    const u = allUsers.find(x => x.id === stu.creatorId);
+                    if (u) saleName = u.name || '';
                 }
-            } catch (e) { /* skip */ }
-        }
+                if (saleName) studentSaleMap[sid] = saleName;
+            }
+        });
 
         html += `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px;">`;
         Object.keys(byTeacher).forEach(tid => {
@@ -721,12 +720,14 @@ async function renderLivePool() {
     }
 }
 
-// Auto-refresh live pool mỗi 60 giây
-setInterval(() => { if (document.getElementById('live-pool-board')) renderLivePool(); }, 60000);
+// Auto-refresh live pool mỗi 120 giây (tiết kiệm reads)
+// Gọi 1 lần sau 5s khi app load, sau đó mỗi 120s
+setTimeout(() => { if (document.getElementById('live-pool-board')) renderLivePool(); }, 5000);
+setInterval(() => { if (document.getElementById('live-pool-board')) renderLivePool(); }, 120000);
 
 // Debounce auto-repair để tránh gọi lại liên tục khi queue thay đổi
-let _autoRepairTimer = null;
-let _autoRepairDone = false;
+var _autoRepairTimer = null;
+var _autoRepairDone = false;
 
 function autoRepairQueue() {
     if (_autoRepairDone || !localState.queueLoaded || localState.teachers.length === 0) return;
@@ -736,7 +737,7 @@ function autoRepairQueue() {
         const teacherIds = new Set(localState.teachers.map(t => t.id));
 
         // 1. Thêm GV thiếu vào fixedOrder
-        const missingTeachers = localState.teachers.filter(t => !localState.fixedOrder.includes(t.id) && !t.queuePaused);
+        const missingTeachers = localState.teachers.filter(t => !(localState.fixedOrder || []).includes(t.id) && !t.queuePaused);
         if (missingTeachers.length > 0) {
             missingTeachers.forEach(t => {
                 pushTeacherToQueue(t.id, t.teacherType || 'Chính', currentBranchId);
@@ -813,6 +814,8 @@ function updateAllUI() {
     if (typeof renderDashboard === 'function') renderDashboard();
     if (typeof renderTeacherStudents === 'function') renderTeacherStudents();
     if (typeof renderSaleStats === 'function') renderSaleStats();
+    if (typeof renderLetanManageTable === 'function') renderLetanManageTable();
+    if (typeof renderLetanClbManageTable === 'function') renderLetanClbManageTable();
 }
 
 
@@ -848,17 +851,36 @@ function listenToBranchData(branchId) {
             updateAllUI();
         });
 
-    // 2. Lắng nghe Học viên
-    const u2 = db.collection('students').where('branchId', '==', branchId)
-        .onSnapshot(snap => {
-            localState.students = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            // Sắp xếp mới nhất lên trên
+    // 2. Lắng nghe Học viên — lọc theo role để tiết kiệm reads
+    let studentsQuery;
+    if (currentUserRole === 'TEACHER') {
+        studentsQuery = db.collection('students')
+            .where('assignedTeacherId', '==', currentUserId);
+    } else if (currentUserRole === 'SALE') {
+        studentsQuery = db.collection('students')
+            .where('creatorId', '==', currentUserId);
+    } else {
+        studentsQuery = db.collection('students')
+            .where('branchId', '==', branchId);
+    }
+    const u2 = studentsQuery.onSnapshot(snap => {
+            const allDocs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            localState.students = allDocs.filter(s => !s.isFullyCompleted);
+            localState.allStudents = allDocs;
+            const archived = allDocs.filter(s => s.isFullyCompleted === true);
+            localState.archivedStudentCount = archived.length;
+            const byTeacher = {};
+            archived.forEach(s => {
+                const tid = s.assignedTeacherId;
+                if (tid) byTeacher[tid] = (byTeacher[tid] || 0) + 1;
+            });
+            localState.archivedCountByTeacher = byTeacher;
             localState.students.sort((a, b) => {
                 const tA = a.createdAt?.toDate?.() || a.createdAt || 0;
                 const tB = b.createdAt?.toDate?.() || b.createdAt || 0;
                 return tB - tA;
             });
-            updateAllUI(); // Render lại list học viên và card count
+            updateAllUI();
         });
 
     // 3. Lắng nghe Queue
@@ -1167,9 +1189,9 @@ async function sendNotification(toUserId, type, message) {
 }
 
 // Listener thông báo real-time
-let notifUnsub = null;
-let notifData = [];
-let shownNotifIds = new Set(); // Track đã hiện push notification chưa
+var notifUnsub = null;
+var notifData = [];
+var shownNotifIds = new Set(); // Track đã hiện push notification chưa
 
 // Xin quyền + đăng ký FCM token cho push notifications
 async function requestNotificationPermission() {
@@ -1519,7 +1541,7 @@ document.addEventListener('click', function (e) {
 // ===================== KHỞI TẠO CƠ SỞ (BRANCH_LOGIC) ===================== //
 
 // Danh sách 5 cơ sở cố định
-let FIXED_BRANCHES = [
+var FIXED_BRANCHES = [
     { id: "branch_thuy_khue", name: "20 Thuỵ Khuê" },
     { id: "branch_nguyen_co_thach", name: "24 Nguyễn Cơ Thạch" },
     { id: "branch_cung_ttdn", name: "Cung TTDN" },
@@ -1958,9 +1980,9 @@ window.openWaiverForm = function (studentId, studentName) {
     }
 };
 
-let _waiverDrawing = false;
-let _waiverCtx = null;
-let _waiverHasDrawn = false;
+var _waiverDrawing = false;
+var _waiverCtx = null;
+var _waiverHasDrawn = false;
 
 function initWaiverCanvas() {
     const canvas = document.getElementById('waiver-canvas');

@@ -540,6 +540,11 @@ body.role-teacher .teacher-node .btn-danger {
     display: none !important;
 }
 
+/* Ẩn Lịch sử điểm danh CLB cho GV (tốn reads) */
+body.role-teacher .clb-history-section {
+    display: none !important;
+}
+
 /* Compact actions/details khi bấm vào dòng học viên */
 .compact-actions.expanded,
 .compact-details.expanded {

@@ -14,3 +14,5 @@ Thumbs.db
 
 # Gemini agent files
 .gemini/
+
+js/_backup_old/

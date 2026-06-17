@@ -11,7 +11,7 @@ function loadRoleScripts(role) {
         'SALE':      ['app-sale.js'],
         'TEACHER':   ['app-teacher.js', 'app-clb.js'],
         'LETAN':     ['app-letan.js'],
-        'KETOAN':    ['app-admin.js'],
+        'KETOAN':    ['app-admin.js', 'app-clb.js'],
         'KHACHHANG': ['app-customer.js']
     };
     const files = roleMap[role] || [];
@@ -489,6 +489,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (khTab) khTab.style.display = 'none';
             if (financeTab) financeTab.style.display = 'flex';
             if (adminTab) adminTab.style.display = 'flex';
+            if (clbTab) clbTab.style.display = 'flex';
 
             // Ẩn lượt chia + HV đang học tại bể trên Dashboard
             const queueSec = document.getElementById('dashboard-queue-section');
@@ -515,6 +516,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (typeof loadAdminUsers === 'function') loadAdminUsers();
             if (typeof initFinanceFilters === 'function') initFinanceFilters();
             if (typeof loadAdminClbStudents === 'function') loadAdminClbStudents();
+            if (typeof listenToAthletes === 'function') listenToAthletes();
+
+            // Ẩn form nhập/sửa VĐV cho kế toán (chỉ xem + tải danh sách)
+            const clbAddSec = document.getElementById('clb-add-section');
+            if (clbAddSec) clbAddSec.style.display = 'none';
+            const clbAdminAct = document.getElementById('clb-admin-actions');
+            if (clbAdminAct) clbAdminAct.style.display = 'none';
         } else if (role === 'KHACHHANG') {
             // KHACHHANG: chỉ xem Tra cứu tiến trình
             const dTab = document.querySelector('[data-tab="dashboard"]');
@@ -858,12 +866,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     const selfTotalSessions = (curriculum === 'Ếch Vip' || curriculum === 'Sải Vip') ? 15 : (curriculum === 'PT' ? (parseInt(ptSessions) || 10) : 10);
                     const isTestStudent = document.getElementById('sale-student-test-1')?.checked || false;
+                    const customerSource = document.getElementById('sale-customer-source')?.value || 'FACE';
                     await db.collection('students').add({
                         name, phone, gender, ageCategory, age: age || 0, assignedTeacherId: teacherId,
                         contractNumber: contractNumber || 'Chưa có',
                         branchId: currentBranchId, sessions: 0,
                         totalSessions: selfTotalSessions,
                         curriculum: curriculum || 'Bơi Ếch', source: 'Self',
+                        customerSource: customerSource,
                         creatorId: currentUserId,
                         isTestStudent: isTestStudent,
                         selfRecruitReason: selfRecruitReason,
@@ -887,7 +897,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         ageCategory: ageCategory || '',
                         teacherName: tObjSelf?.name || 'N/A',
                         saleName: currentUserDisplayName || 'Sale',
-                        sessions: selfTotalSessions
+                        sessions: selfTotalSessions,
+                        customerSource: customerSource || 'FACE'
                     });
 
                     alert('✅ Thêm học viên tự tuyển thành công!');
@@ -963,11 +974,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     const isLastStudent = (i === count);
                     const isTest = document.getElementById(`sale-student-test-${i}`)?.checked || false;
+                    const customerSource = document.getElementById('sale-customer-source')?.value || 'FACE';
                     // Lặn: không theo queue (isDiving=true → truyền isException=true để skip queue, nhưng không ghi nợ)
                     const isExceptionForThisStudent = isDiving ? true : (isSaleExceptionMode && (i === 1));
                     // Chỉ advance queue khi là HV CUỐI CÙNG trong lượt (count > 1 → HV trước skip queue)
                     const skipQueue = (!isLastStudent && !isDiving && !isExceptionForThisStudent);
-                    await saleAssignStudent(name, phone, gender, ageCategory, contractNumber, finalTeacherId, curriculum, ptSessions, isExceptionForThisStudent, age, isTest, isDiving, skipQueue);
+                    await saleAssignStudent(name, phone, gender, ageCategory, contractNumber, finalTeacherId, curriculum, ptSessions, isExceptionForThisStudent, age, isTest, isDiving, skipQueue, customerSource);
                 }
 
                 alert(`✅ Đã gán ${count} học viên thành công!`);
@@ -1006,7 +1018,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 salaryConfirmedAt: firebase.firestore.FieldValue.serverTimestamp(),
                 salaryConfirmedBy: currentUserId,
                 salarySubmittedMonth: month,
-                salarySubmittedAt: firebase.firestore.FieldValue.serverTimestamp()
+                salarySubmittedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                saleRejected: firebase.firestore.FieldValue.delete(),
+                saleRejectedBy: firebase.firestore.FieldValue.delete(),
+                saleRejectedAt: firebase.firestore.FieldValue.delete()
             });
             // Thông báo Sale: GV đã chốt lương
             const stuDoc = await db.collection('students').doc(studentId).get();

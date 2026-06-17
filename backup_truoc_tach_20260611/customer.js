@@ -1,18 +1,19 @@
-// ===== GreenPool App — Customer Module (v7.0) =====
+// ===================== MODULE: KHÁCH HÀNG (customer.js) ===================== //
+// Depends on: db, currentUserId, currentUserRole, FIXED_BRANCHES, sendNotification, isDivingCurriculum
+// from app.js (loaded first)
 
-// ===================== KHÁCH HÀNG - TRA CỨU TIẾN TRÌNH ===================== //
-function populateKhachhangBranches() {
+window.populateKhachhangBranches = function populateKhachhangBranches() {
     const sel = document.getElementById('khachhang-branch');
     if (!sel) return;
     sel.innerHTML = '<option value="">-- Chọn cơ sở --</option>';
     FIXED_BRANCHES.forEach(b => {
         sel.innerHTML += `<option value="${b.id}">${b.name}</option>`;
     });
-}
+};
 
 // ===================== KHÁCH HÀNG - DASHBOARD HĐ LIÊN KẾT ===================== //
 // Load và hiển thị các HĐ CLB đã liên kết
-async function loadLinkedContracts() {
+window.loadLinkedContracts = async function loadLinkedContracts() {
     const container = document.getElementById('kh-linked-cards');
     if (!container || !currentUserId) return;
 
@@ -51,7 +52,8 @@ async function loadLinkedContracts() {
                 const branchName = branch?.name || 'N/A';
                 const expDate = a.expiresAt?.toDate ? a.expiresAt.toDate() : (a.expiresAt ? new Date(a.expiresAt) : null);
                 const activDate = a.activatedAt?.toDate ? a.activatedAt.toDate() : (a.activatedAt ? new Date(a.activatedAt) : null);
-                const isExpired = a.isExpired || (expDate && new Date() > expDate);
+                const _expEnd = expDate ? new Date(expDate.getFullYear(), expDate.getMonth(), expDate.getDate(), 23, 59, 59) : null;
+                const isExpired = a.isExpired || (_expEnd && new Date() > _expEnd);
                 const isFrozen = a.isFrozen;
 
                 // Status badge
@@ -335,7 +337,8 @@ window.searchStudentProgress = function (query) {
                     const levelColor = { 'Mầm': '#ec4899', 'D1': '#3b82f6', 'D2': '#8b5cf6', 'C': '#f59e0b', 'B': '#ef4444', 'A': '#10b981' }[st.classLevel] || '#6b7280';
                     const activatedAt = st.activatedAt?.toDate ? st.activatedAt.toDate() : null;
                     const expiresAt = st.expiresAt?.toDate ? st.expiresAt.toDate() : null;
-                    const isExpired = st.isExpired || (expiresAt && expiresAt < new Date());
+                    const _expEnd2 = expiresAt ? new Date(expiresAt.getFullYear(), expiresAt.getMonth(), expiresAt.getDate(), 23, 59, 59) : null;
+                    const isExpired = st.isExpired || (_expEnd2 && _expEnd2 < new Date());
                     const statusText = st.isFrozen ? '⏸ Bảo lưu' : isExpired ? '❌ Hết hạn' : '✅ Hoạt động';
                     const statusColor = st.isFrozen ? '#6366f1' : isExpired ? '#ef4444' : '#16a34a';
 
@@ -642,4 +645,3 @@ window.searchStudentProgress = function (query) {
         }
     }, 500);
 };
-

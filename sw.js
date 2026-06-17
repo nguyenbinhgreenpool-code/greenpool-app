@@ -29,18 +29,68 @@ messaging.onBackgroundMessage((payload) => {
     return self.registration.showNotification(title, options);
 });
 
-const CACHE_NAME = 'greenpool-v7.2';
+// ===================== CACHE STRATEGY ===================== //
+const CACHE_VERSION = '7.8';
+const CACHE_NAME = 'greenpool-v' + CACHE_VERSION;
 
+// Assets cần pre-cache khi install (load offline được)
+const PRE_CACHE_ASSETS = [
+    '/',
+    '/index.html',
+    '/styles.css',
+    '/app.min.js',
+    '/js/app-common.min.js',
+    '/js/clb.min.js',
+    '/js/customer.min.js',
+    '/js/teacher.min.js',
+    '/js/letan.min.js',
+    '/icon-192.png',
+    '/icon-512.png',
+    '/manifest.json'
+];
+
+// Domains cần cache (CDN, fonts, Firebase SDK)
+const CACHEABLE_ORIGINS = [
+    'https://fonts.googleapis.com',
+    'https://fonts.gstatic.com',
+    'https://cdnjs.cloudflare.com',
+    'https://www.gstatic.com/firebasejs',
+    'https://cdn.jsdelivr.net',
+    'https://cdn.sheetjs.com'
+];
+
+// Domains KHÔNG BAO GIỜ cache (API, realtime data)
+const NEVER_CACHE = [
+    'firestore.googleapis.com',
+    'identitytoolkit.googleapis.com',
+    'securetoken.googleapis.com',
+    'fcmregistrations.googleapis.com',
+    'cloudfunctions.net',
+    'quanly.greenpool.vn',
+    'script.google.com',
+    'firebasestorage.googleapis.com'
+];
+
+// ===================== INSTALL: Pre-cache assets ===================== //
 self.addEventListener('install', (e) => {
-    self.skipWaiting();
+    e.waitUntil(
+        caches.open(CACHE_NAME).then(cache => {
+            console.log('[SW] Pre-caching assets...');
+            return cache.addAll(PRE_CACHE_ASSETS).catch(err => {
+                console.warn('[SW] Pre-cache partial fail (OK):', err);
+            });
+        }).then(() => self.skipWaiting())
+    );
 });
 
+// ===================== ACTIVATE: Xoá cache cũ ===================== //
 self.addEventListener('activate', (e) => {
     e.waitUntil(
-        caches.keys().then((cacheNames) => {
+        caches.keys().then(cacheNames => {
             return Promise.all(
-                cacheNames.map((cache) => {
+                cacheNames.map(cache => {
                     if (cache !== CACHE_NAME) {
+                        console.log('[SW] Xoá cache cũ:', cache);
                         return caches.delete(cache);
                     }
                 })
@@ -49,18 +99,62 @@ self.addEventListener('activate', (e) => {
     );
 });
 
+// ===================== FETCH: Smart caching ===================== //
 self.addEventListener('fetch', (e) => {
     const url = new URL(e.request.url);
+
+    // 1. KHÔNG cache API/Firestore/GP — luôn fetch network
+    if (NEVER_CACHE.some(domain => url.hostname.includes(domain))) {
+        return; // Để browser xử lý bình thường
+    }
+
+    // 2. Navigation (HTML) → Network first, cache fallback
+    if (e.request.mode === 'navigate') {
+        e.respondWith(
+            fetch(e.request).then(response => {
+                const clone = response.clone();
+                caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+                return response;
+            }).catch(() => caches.match('/index.html'))
+        );
+        return;
+    }
+
+    // 3. Static assets cùng origin (.js, .css, images) → Network first, cache fallback
     if (url.origin === self.location.origin) {
         e.respondWith(
-            fetch(e.request, { cache: 'no-store' }).catch(() => caches.match(e.request))
+            fetch(e.request).then(response => {
+                if (response.ok) {
+                    const clone = response.clone();
+                    caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+                }
+                return response;
+            }).catch(() => caches.match(e.request))
         );
-    } else {
-        e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+        return;
     }
+
+    // 4. CDN/Fonts/Firebase SDK → Cache first (ít thay đổi)
+    if (CACHEABLE_ORIGINS.some(origin => url.href.startsWith(origin))) {
+        e.respondWith(
+            caches.match(e.request).then(cached => {
+                if (cached) return cached;
+                return fetch(e.request).then(response => {
+                    if (response.ok) {
+                        const clone = response.clone();
+                        caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+                    }
+                    return response;
+                });
+            })
+        );
+        return;
+    }
+
+    // 5. Mọi thứ khác → Network bình thường
 });
 
-// Push Notification click → mở/focus app
+// ===================== PUSH NOTIFICATION CLICK ===================== //
 self.addEventListener('notificationclick', (e) => {
     e.notification.close();
     e.waitUntil(
