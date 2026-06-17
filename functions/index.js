@@ -276,7 +276,10 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
 
         let discountCode = rawDiscountCode;
 
-        if (discountCode && STANDARD_CODES.includes(discountCode)) {
+        if (paymentInfo?.isGpCode && discountCode) {
+            // Mã GP gốc từ dropdown (đã sync từ GP) → gửi thẳng, KHÔNG mapping
+            console.log(`[GP-v2] GP code from dropdown: "${discountCode}" (skip mapping)`);
+        } else if (discountCode && STANDARD_CODES.includes(discountCode)) {
             // Mã % chuẩn → thêm suffix site (GIAM15 → GIAM15_NCT)
             const suffix = SITE_SUFFIX[siteId] || '_CTT';
             discountCode = discountCode + suffix;

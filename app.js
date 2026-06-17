@@ -937,6 +937,7 @@ async function syncToGreenPool(studentData) {
         const paidAmount = parseInt(paymentInfo.paidAmount) || originalAmount;
         const payMethod = paymentInfo.payMethod || 'cash';
         const discountCode = paymentInfo.discountCode || '';
+        const isGpCode = paymentInfo.isGpCode || false;
         const saleGpId = gpSale?.id ? String(gpSale.id) : '';
         const gpSiteId = GP_API.siteMap[currentBranchId] || 2;
         const gpGender = (gender === 'Nữ' || gender === 'female') ? 2 : 1;
@@ -962,7 +963,8 @@ async function syncToGreenPool(studentData) {
                 site_id: gpSiteId,
                 pay_method: payMethod,
                 pay_amount: paidAmount,
-                discount_code: discountCode || undefined
+                discount_code: discountCode || undefined,
+                isGpCode: isGpCode || undefined
             },
             customerSource: customerSource || 'FACE'
         };
@@ -3682,6 +3684,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // Helper: lấy discount info từ form (dropdown GP hoặc nhập tay)
+    window.getDiscountInfo = function(idx) {
+        const customVal = (document.getElementById(`sale-student-discount-custom-${idx}`)?.value || '').trim().toUpperCase();
+        const sel = document.getElementById(`sale-student-discount-${idx}`);
+        const dropdownVal = sel?.value || '';
+        const isGpCode = !customVal && !!dropdownVal && sel?.selectedOptions?.[0]?.dataset?.gpCode === 'true';
+        return { discountCode: customVal || dropdownVal || '', isGpCode };
+    };
+
     // Xử lý chuyển đổi curriculum (Bơi / Lặn / PT)
     window.handleCurriculumChange = function (idx, value) {
         const ptGroup = document.getElementById(`sale-pt-group-${idx}`);
@@ -3863,10 +3874,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         container.innerHTML = html;
 
-        // Populate discount dropdowns — mã giảm theo CƠ SỞ (chỉ hiện mã CÓ trên GP)
-        (() => {
-            // Mã % chuẩn (có trên GP tất cả site TRỪ Thanh Trì)
-            const pctDiscounts = [
+        // Populate discount dropdowns — mã giảm từ GP (Firestore) hoặc fallback hardcode
+        (async () => {
+            const gpSiteId = GP_API.siteMap[currentBranchId] || 2;
+            let gpDiscounts = null;
+
+            // Thử load từ Firestore (đã sync từ GP)
+            try {
+                const cfgDoc = await db.collection('config').doc('gp_discounts').get();
+                if (cfgDoc.exists) {
+                    const siteData = cfgDoc.data()?.sites?.[String(gpSiteId)];
+                    if (siteData?.discounts?.length > 0) {
+                        gpDiscounts = siteData.discounts;
+                        console.log(`✅ [Discount] GP: ${gpDiscounts.length} mã cho ${siteData.label} (site ${gpSiteId})`);
+                    }
+                }
+            } catch (e) { console.warn('[Discount] Load GP failed:', e.message); }
+
+            // Fallback hardcode (dùng khi chưa sync GP)
+            const fallbackPct = [
                 { label: 'Giảm 10%', code: 'GIAM10', type: 'percent', value: 10 },
                 { label: 'Giảm 15%', code: 'GIAM15', type: 'percent', value: 15 },
                 { label: 'Giảm 20%', code: 'GIAM20', type: 'percent', value: 20 },
@@ -3875,9 +3901,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 { label: 'Giảm 40%', code: 'GIAM40', type: 'percent', value: 40 },
                 { label: 'Giảm 50%', code: 'GIAM50', type: 'percent', value: 50 },
             ];
-
-            // Mã số tiền cố định THEO CƠ SỞ (đúng mã có trên GP)
-            const fixedByBranch = {
+            const fallbackFixed = {
                 'branch_nguyen_co_thach': [
                     { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
                     { label: 'Giảm 800K', code: 'GIAM800K', type: 'fixed', value: 800000 },
@@ -3912,19 +3936,47 @@ document.addEventListener('DOMContentLoaded', () => {
                 ],
             };
 
-            // Tất cả cơ sở đều có mã % trên GP (NCT, CTT, TK, HM=_TT, TT=_TTRI)
-            const noPercentBranches = [];
-            const branchFixed = fixedByBranch[currentBranchId] || [];
-
             for (let i = 1; i <= n; i++) {
                 const sel = document.getElementById(`sale-student-discount-${i}`);
                 if (!sel) continue;
 
-                // Mã %
-                if (!noPercentBranches.includes(currentBranchId)) {
+                if (gpDiscounts) {
+                    // === Mã từ GP (Firestore sync) — gửi thẳng lên GP ===
+                    const pctList = gpDiscounts.filter(d => d.type === 'percent');
+                    const fixedList = gpDiscounts.filter(d => d.type === 'fixed');
+                    if (pctList.length > 0) {
+                        const grp = document.createElement('optgroup');
+                        grp.label = '── Giảm % (GP) ──';
+                        pctList.forEach(d => {
+                            const opt = document.createElement('option');
+                            opt.value = d.code;
+                            opt.textContent = d.label;
+                            opt.dataset.type = d.type;
+                            opt.dataset.value = d.value;
+                            opt.dataset.gpCode = 'true';
+                            grp.appendChild(opt);
+                        });
+                        sel.appendChild(grp);
+                    }
+                    if (fixedList.length > 0) {
+                        const grp = document.createElement('optgroup');
+                        grp.label = '── Giảm số tiền (GP) ──';
+                        fixedList.forEach(d => {
+                            const opt = document.createElement('option');
+                            opt.value = d.code;
+                            opt.textContent = `${d.label} (${d.code})`;
+                            opt.dataset.type = d.type;
+                            opt.dataset.value = d.value;
+                            opt.dataset.gpCode = 'true';
+                            grp.appendChild(opt);
+                        });
+                        sel.appendChild(grp);
+                    }
+                } else {
+                    // === Fallback hardcode (chưa sync GP) — dùng mapping CF ===
                     const grpPct = document.createElement('optgroup');
                     grpPct.label = '── Giảm % ──';
-                    pctDiscounts.forEach(d => {
+                    fallbackPct.forEach(d => {
                         const opt = document.createElement('option');
                         opt.value = d.code;
                         opt.textContent = d.label;
@@ -3933,21 +3985,21 @@ document.addEventListener('DOMContentLoaded', () => {
                         grpPct.appendChild(opt);
                     });
                     sel.appendChild(grpPct);
-                }
 
-                // Mã số tiền
-                if (branchFixed.length > 0) {
-                    const grpFixed = document.createElement('optgroup');
-                    grpFixed.label = '── Giảm số tiền ──';
-                    branchFixed.forEach(d => {
-                        const opt = document.createElement('option');
-                        opt.value = d.code;
-                        opt.textContent = d.label;
-                        opt.dataset.type = d.type;
-                        opt.dataset.value = d.value;
-                        grpFixed.appendChild(opt);
-                    });
-                    sel.appendChild(grpFixed);
+                    const branchFixed = fallbackFixed[currentBranchId] || [];
+                    if (branchFixed.length > 0) {
+                        const grpFixed = document.createElement('optgroup');
+                        grpFixed.label = '── Giảm số tiền ──';
+                        branchFixed.forEach(d => {
+                            const opt = document.createElement('option');
+                            opt.value = d.code;
+                            opt.textContent = d.label;
+                            opt.dataset.type = d.type;
+                            opt.dataset.value = d.value;
+                            grpFixed.appendChild(opt);
+                        });
+                        sel.appendChild(grpFixed);
+                    }
                 }
             }
         })();
@@ -4041,10 +4093,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     const selfTotalSessions = DIVING_CURRICULUMS[curriculum] || ((curriculum === 'Ếch Vip' || curriculum === 'Sải Vip') ? 15 : (curriculum === 'PT' ? (parseInt(ptSessions) || 10) : 10));
                     const isTestStudent = document.getElementById('sale-student-test-1')?.checked || false;
+                    const _di1 = getDiscountInfo(1);
                     const selfPaymentInfoForSave = {
                         totalAmount: (document.getElementById('sale-student-total-1')?.value || '0').replace(/\./g, ''),
                         paidAmount: (document.getElementById('sale-student-paid-1')?.value || '').replace(/\./g, ''),
-                        discountCode: (document.getElementById('sale-student-discount-custom-1')?.value || '').trim().toUpperCase() || document.getElementById('sale-student-discount-1')?.value || ''
+                        discountCode: _di1.discountCode,
+                        isGpCode: _di1.isGpCode
                     };
                     // ❌ CHẶN: Đóng tiền < Tổng mà KHÔNG chọn mã giảm → KHÔNG CHO LƯU
                     const sfTotal = parseInt(selfPaymentInfoForSave.totalAmount) || 0;
@@ -4094,11 +4148,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     // ===== ĐỒNG BỘ SANG GREENPOOL (tự tuyển) =====
                     try {
+                        const _diSelf = getDiscountInfo(1);
                         const selfPaymentInfo = {
                             totalAmount: (document.getElementById('sale-student-total-1')?.value || '0').replace(/\./g, ''),
                             paidAmount: (document.getElementById('sale-student-paid-1')?.value || '').replace(/\./g, ''),
                             payMethod: document.getElementById('sale-student-paymethod-1')?.value || 'cash',
-                            discountCode: (document.getElementById('sale-student-discount-custom-1')?.value || '').trim().toUpperCase() || document.getElementById('sale-student-discount-1')?.value || ''
+                            discountCode: _diSelf.discountCode,
+                            isGpCode: _diSelf.isGpCode
                         };
                         console.log('🔄 [GP] Bắt đầu đồng bộ tự tuyển:', { name, phone, rawCurriculum, contractNumber });
                         const gpResult = await syncToGreenPool({
@@ -4200,7 +4256,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     // ❌ CHẶN: Đóng tiền < Tổng mà KHÔNG chọn mã giảm → KHÔNG CHO LƯU
                     const chkTotal = parseInt((document.getElementById(`sale-student-total-${i}`)?.value || '0').replace(/\./g, '')) || 0;
                     const chkPaid = parseInt((document.getElementById(`sale-student-paid-${i}`)?.value || '0').replace(/\./g, '')) || 0;
-                    const chkDiscount = (document.getElementById(`sale-student-discount-custom-${i}`)?.value || '').trim() || document.getElementById(`sale-student-discount-${i}`)?.value || '';
+                    const chkDiscount = getDiscountInfo(i).discountCode;
                     if (chkTotal > 0 && chkPaid > 0 && chkPaid < chkTotal && !chkDiscount) {
                         showSaleTab(i);
                         const diff = (chkTotal - chkPaid).toLocaleString('vi-VN');
@@ -4237,11 +4293,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     // Chỉ advance queue khi là HV CUỐI CÙNG trong lượt
                     const skipQueue = (!isLastStudent && !isDiving && !isExceptionForThisStudent);
                     // Thông tin thanh toán
+                    const _diQ = getDiscountInfo(i);
                     const paymentInfo = {
                         totalAmount: (document.getElementById(`sale-student-total-${i}`)?.value || '0').replace(/\./g, ''),
                         paidAmount: (document.getElementById(`sale-student-paid-${i}`)?.value || '').replace(/\./g, ''),
                         payMethod: document.getElementById(`sale-student-paymethod-${i}`)?.value || 'cash',
-                        discountCode: (document.getElementById(`sale-student-discount-custom-${i}`)?.value || '').trim().toUpperCase() || document.getElementById(`sale-student-discount-${i}`)?.value || ''
+                        discountCode: _diQ.discountCode,
+                        isGpCode: _diQ.isGpCode
                     };
                     await saleAssignStudent(name, phone, gender, ageCategory, contractNumber, finalTeacherId, curriculum, ptSessions, isExceptionForThisStudent, age, isTest, isDiving, skipQueue, paymentInfo, rawCurriculum);
                 }
