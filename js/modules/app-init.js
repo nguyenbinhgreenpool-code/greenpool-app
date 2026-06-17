@@ -2166,7 +2166,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const gpSync = firebase.functions().httpsCallable('gpSyncDiscounts');
             const result = await gpSync({});
             if (result.data?.success) {
-                alert(`✅ Đã sync ${result.data.totalDiscounts || 0} mã giảm giá từ GP!\n\nĐóng form và mở lại để thấy mã mới.`);
+                alert(`✅ Đã sync ${result.data.totalCodes || 0} mã giảm giá từ GP (${result.data.siteCount || 0} cơ sở)!\n\nForm sẽ tự cập nhật.`);
+                // Re-generate forms để load mã mới từ Firestore
+                const countEl = document.getElementById('sale-contract-count');
+                const count = parseInt(countEl?.value) || 1;
+                generateSaleStudentForms(count);
             } else {
                 alert('⚠️ Sync không thành công: ' + (result.data?.error || 'Unknown'));
             }

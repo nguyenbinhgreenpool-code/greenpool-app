@@ -117,6 +117,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ===== CONFIG (GP discounts, cấu hình chung) =====
+    match /config/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
     // ===== BACKUPS =====
     match /backups/{id} {
       allow read, write: if isAdmin();
