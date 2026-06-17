@@ -1129,12 +1129,19 @@ async function syncDiscountsFromGP() {
         5: { phone: '0934654683', pass: '123456789', label: 'TT', name: 'Thanh Trì' },
     };
 
-    // Package IDs liên quan đến gói học bơi (tất cả các site)
-    // Lọc rộng: lấy tất cả discount CÓ GẮN package (không chỉ HB)
+    // Package IDs học bơi/lặn theo từng site (từ GP_API.packageMap)
+    const SWIM_PACKAGE_IDS = {
+        1: [503, 502, 505, 504, 510, 509, 512, 511, 508],           // NCT
+        2: [532, 531, 669, 670, 563, 562, 565, 564, 696, 697, 698, 695, 489],  // Cung TTDN
+        3: [730, 725, 731, 726, 739, 737, 740, 738, 732, 733],      // Thuỷ Khuê
+        4: [428, 429, 431, 432, 434, 420],                           // Hoàng Mai
+        5: [550, 549, 552, 551, 590, 588, 591, 589, 553, 555, 702], // Thanh Trì
+    };
     const sites = {};
     const errors = [];
 
     for (const [siteId, acct] of Object.entries(SITE_ACCOUNTS)) {
+        const swimPkgIds = SWIM_PACKAGE_IDS[siteId] || [];
         try {
             // Login bằng tài khoản site
             const loginRes = await fetch(`${GP_BASE}/login`, {
@@ -1159,9 +1166,14 @@ async function syncDiscountsFromGP() {
                 continue;
             }
 
-            // Lọc: chỉ lấy discount CÓ package gắn kèm (bỏ mã trống/không gắn gói)
+            // Lọc: chỉ lấy discount có GẮN package HỌC BƠI (không lấy gym/spa)
             const discounts = allDiscounts
-                .filter(d => (d.packages || []).length > 0)
+                .filter(d => {
+                    const pkgs = d.packages || [];
+                    if (pkgs.length === 0) return false;
+                    // Discount phải có ÍT NHẤT 1 package thuộc danh sách học bơi
+                    return pkgs.some(p => swimPkgIds.includes(p.id));
+                })
                 .map(d => {
                     const type = d.discount_type; // 'percent' hoặc 'fixed'
                     const value = d.discount_value;
@@ -1188,7 +1200,9 @@ async function syncDiscountsFromGP() {
                 .sort((a, b) => {
                     if (a.type === b.type) return a.value - b.value;
                     return a.type === 'percent' ? -1 : 1;
-                });
+                })
+                // Loại bỏ trùng lặp (cùng code)
+                .filter((d, idx, arr) => arr.findIndex(x => x.code === d.code) === idx);
 
             sites[siteId] = {
                 name: acct.name,
