@@ -2319,7 +2319,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <input type="text" inputmode="numeric" id="sale-student-total-${i}" placeholder="VD: 3.000.000" style="padding:8px 10px;" oninput="formatMoney(this); calcDiscount(${i})">
                         </div>
                         <div class="form-group flex-1">
-                            <label>Mã giảm giá ${currentUserRole === 'ADMIN' ? '<button type="button" onclick="syncGpDiscounts()" style="margin-left:6px; padding:2px 8px; font-size:10px; border-radius:4px; border:1px solid rgba(59,130,246,0.3); background:rgba(59,130,246,0.08); color:#3b82f6; cursor:pointer;" title="Sync mã giảm từ GP">🔄 Sync GP</button>' : ''}</label>
+                            <label>Mã giảm giá <button type="button" onclick="syncGpDiscounts()" style="margin-left:6px; padding:2px 8px; font-size:10px; border-radius:4px; border:1px solid rgba(59,130,246,0.3); background:rgba(59,130,246,0.08); color:#3b82f6; cursor:pointer;" title="Sync mã giảm từ GP">🔄 Sync GP</button></label>
                             <select id="sale-student-discount-${i}" class="modern-select" style="padding:8px 10px;" onchange="document.getElementById('sale-student-discount-custom-${i}').value=''; calcDiscount(${i})">
                                 <option value="">-- Không giảm giá --</option>
                             </select>
