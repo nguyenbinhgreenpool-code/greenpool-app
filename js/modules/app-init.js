@@ -2423,29 +2423,43 @@ document.addEventListener('DOMContentLoaded', () => {
             for (let i = 1; i <= count; i++) {
                 const sel = document.getElementById(`sale-student-discount-${i}`);
                 if (!sel) continue;
+
+                // Gộp GP + fallback, dedup theo type+value
+                const branchFixed = fallbackFixed[currentBranchId] || [];
+                let allCodes = [];
+
+                // 1. Thêm mã từ GP (nếu có)
                 if (gpDiscounts) {
-                    // Mã từ GP — hiện theo site
-                    gpDiscounts.forEach(d => {
-                        const opt = document.createElement('option');
-                        opt.value = d.code;
-                        opt.textContent = d.type === 'fixed' ? `${d.label} (${d.code})` : d.label;
-                        opt.dataset.type = d.type;
-                        opt.dataset.value = d.value;
-                        opt.dataset.gpCode = 'true';
-                        sel.appendChild(opt);
-                    });
-                } else {
-                    // Fallback — chỉ mã cố định theo cơ sở
-                    const branchFixed = fallbackFixed[currentBranchId] || [];
-                    branchFixed.forEach(d => {
-                        const opt = document.createElement('option');
-                        opt.value = d.code;
-                        opt.textContent = d.label;
-                        opt.dataset.type = d.type;
-                        opt.dataset.value = d.value;
-                        sel.appendChild(opt);
-                    });
+                    gpDiscounts.forEach(d => allCodes.push({ ...d, source: 'gp' }));
                 }
+                // 2. Thêm mã fallback (luôn có)
+                branchFixed.forEach(d => allCodes.push({ ...d, source: 'fallback' }));
+
+                // 3. Dedup theo type+value (ưu tiên GP trước)
+                const seen = new Set();
+                allCodes = allCodes.filter(d => {
+                    const key = `${d.type}_${d.value}`;
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
+
+                // 4. Sắp xếp: fixed tăng dần, % tăng dần
+                allCodes.sort((a, b) => {
+                    if (a.type === b.type) return a.value - b.value;
+                    return a.type === 'fixed' ? -1 : 1;
+                });
+
+                // 5. Render
+                allCodes.forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d.code;
+                    opt.textContent = d.type === 'fixed' ? `${d.label} (${d.code})` : d.label;
+                    opt.dataset.type = d.type;
+                    opt.dataset.value = d.value;
+                    if (d.source === 'gp') opt.dataset.gpCode = 'true';
+                    sel.appendChild(opt);
+                });
             }
         })();
     };
