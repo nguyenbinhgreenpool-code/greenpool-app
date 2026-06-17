@@ -1111,3 +1111,131 @@ exports.gpFixHttp = onRequest({ maxInstances: 1, timeoutSeconds: 540 }, async (r
     const fixed = results.filter(r => r.status === 'FIXED').length;
     res.json({ mode, total: docs.length, needFix, fixed, results });
 });
+
+// ============ ĐỒNG BỘ MÃ GIẢM GIÁ TỪ GP → FIRESTORE ============ //
+// Login từng site account → GET /admin/discount → lọc gói HB → lưu Firestore
+// Không dùng admin switching → an toàn, không ảnh hưởng các function khác
+
+async function syncDiscountsFromGP() {
+    const GP_BASE = "https://quanly.greenpool.vn/api";
+    const SITE_ACCOUNTS = {
+        1: { phone: '0865028566', pass: '123456789', label: 'NCT', name: 'Nguyễn Cơ Thạch' },
+        2: { phone: '0769101101', pass: '123456789', label: 'CTT', name: 'Cầu Tó Thanh Trì' },
+        3: { phone: '0334019412', pass: '123456789', label: 'TK', name: 'Thuỷ Khuê' },
+        4: { phone: '0326324642', pass: '123456789', label: 'HM', name: 'Hoàng Mai' },
+        5: { phone: '0934654683', pass: '123456789', label: 'TT', name: 'Thanh Trì' },
+    };
+
+    // Package IDs liên quan đến gói học bơi (tất cả các site)
+    // Lọc rộng: lấy tất cả discount CÓ GẮN package (không chỉ HB)
+    const sites = {};
+    const errors = [];
+
+    for (const [siteId, acct] of Object.entries(SITE_ACCOUNTS)) {
+        try {
+            // Login bằng tài khoản site
+            const loginRes = await fetch(`${GP_BASE}/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ phone: acct.phone, password: acct.pass })
+            });
+            const loginData = await loginRes.json();
+            const token = loginData?.authorisation?.token;
+            if (!token) {
+                errors.push({ site: siteId, label: acct.label, error: 'Login failed' });
+                continue;
+            }
+
+            // GET tất cả discount của site này
+            const discRes = await fetch(`${GP_BASE}/admin/discount`, {
+                headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
+            });
+            const allDiscounts = await discRes.json();
+            if (!Array.isArray(allDiscounts)) {
+                errors.push({ site: siteId, label: acct.label, error: 'Invalid response' });
+                continue;
+            }
+
+            // Lọc: chỉ lấy discount CÓ package gắn kèm (bỏ mã trống/không gắn gói)
+            const discounts = allDiscounts
+                .filter(d => (d.packages || []).length > 0)
+                .map(d => {
+                    const type = d.discount_type; // 'percent' hoặc 'fixed'
+                    const value = d.discount_value;
+                    let label = '';
+                    if (type === 'percent') {
+                        label = `Giảm ${value}%`;
+                    } else if (type === 'fixed') {
+                        label = value >= 1000000
+                            ? `Giảm ${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1)}tr`
+                            : `Giảm ${Math.round(value / 1000)}K`;
+                    }
+                    return {
+                        code: d.code,
+                        type: type,
+                        value: value,
+                        label: label,
+                        packages: (d.packages || []).map(p => ({
+                            id: p.id,
+                            name: p.name
+                        }))
+                    };
+                })
+                // Sắp xếp: % trước (tăng dần), fixed sau (tăng dần)
+                .sort((a, b) => {
+                    if (a.type === b.type) return a.value - b.value;
+                    return a.type === 'percent' ? -1 : 1;
+                });
+
+            sites[siteId] = {
+                name: acct.name,
+                label: acct.label,
+                count: discounts.length,
+                discounts: discounts
+            };
+            console.log(`[SyncDisc] ✅ Site ${siteId} (${acct.label}): ${discounts.length} mã giảm`);
+        } catch (e) {
+            errors.push({ site: siteId, label: acct.label, error: e.message });
+            console.error(`[SyncDisc] ❌ Site ${siteId}: ${e.message}`);
+        }
+    }
+
+    // Lưu vào Firestore: config/gp_discounts
+    const syncData = {
+        lastSyncedAt: FieldValue.serverTimestamp(),
+        lastSyncedAtISO: new Date().toISOString(),
+        sites: sites,
+        errors: errors
+    };
+    await db.collection('config').doc('gp_discounts').set(syncData, { merge: false });
+
+    const totalCodes = Object.values(sites).reduce((sum, s) => sum + s.count, 0);
+    console.log(`[SyncDisc] ✅ Saved ${totalCodes} discount codes across ${Object.keys(sites).length} sites`);
+    return { success: true, totalCodes, siteCount: Object.keys(sites).length, errors };
+}
+
+// Callable: Admin gọi thủ công từ app
+exports.gpSyncDiscounts = onCall({ maxInstances: 1, timeoutSeconds: 60 }, async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Chưa đăng nhập.");
+    const callerDoc = await db.collection("users").doc(request.auth.uid).get();
+    if (!callerDoc.exists || callerDoc.data().role !== "ADMIN") {
+        throw new HttpsError("permission-denied", "Chỉ Admin mới được sync.");
+    }
+    console.log(`[SyncDisc] Manual sync triggered by ${request.auth.uid}`);
+    const result = await syncDiscountsFromGP();
+    return result;
+});
+
+// Scheduled: Tự động sync mỗi ngày 7h sáng VN (0:00 UTC)
+exports.gpSyncDiscountsScheduled = onSchedule(
+    {
+        schedule: "0 0 * * *",  // 0:00 UTC = 7:00 AM Vietnam
+        timeZone: "Asia/Ho_Chi_Minh",
+        region: "asia-southeast1",
+        retryCount: 1,
+    },
+    async () => {
+        console.log("[SyncDisc] Scheduled daily sync started");
+        await syncDiscountsFromGP();
+    }
+);
