@@ -3684,6 +3684,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // Sync mã giảm giá từ GP (Admin only)
+    window.syncGpDiscounts = async function() {
+        if (currentUserRole !== 'ADMIN') return alert('❌ Chỉ Admin mới được sync!');
+        try {
+            const btn = event?.target?.closest('button');
+            if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Đang sync...'; }
+            const gpSync = firebase.functions().httpsCallable('gpSyncDiscounts');
+            const result = await gpSync({});
+            if (result.data?.success) {
+                alert(`✅ Đã sync ${result.data.totalDiscounts || 0} mã giảm giá từ GP!\n\nĐóng form và mở lại để thấy mã mới.`);
+                // Clear cache để reload
+                GP_API.discountCache = {};
+            } else {
+                alert('⚠️ Sync không thành công: ' + (result.data?.error || 'Unknown'));
+            }
+            if (btn) { btn.disabled = false; btn.innerHTML = '🔄 Sync GP'; }
+        } catch (e) {
+            alert('❌ Lỗi sync: ' + e.message);
+        }
+    };
+
     // Helper: lấy discount info từ form (dropdown GP hoặc nhập tay)
     window.getDiscountInfo = function(idx) {
         const customVal = (document.getElementById(`sale-student-discount-custom-${idx}`)?.value || '').trim().toUpperCase();
@@ -3827,7 +3848,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <input type="text" inputmode="numeric" id="sale-student-total-${i}" placeholder="VD: 3.000.000" style="padding:8px 10px;" oninput="formatMoney(this); calcDiscount(${i})">
                         </div>
                         <div class="form-group flex-1">
-                            <label>Mã giảm giá</label>
+                            <label>Mã giảm giá ${currentUserRole === 'ADMIN' ? '<button type="button" onclick="syncGpDiscounts()" style="margin-left:6px; padding:2px 8px; font-size:10px; border-radius:4px; border:1px solid rgba(59,130,246,0.3); background:rgba(59,130,246,0.08); color:#3b82f6; cursor:pointer;" title="Sync mã giảm từ GP">🔄 Sync GP</button>' : ''}</label>
                             <select id="sale-student-discount-${i}" class="modern-select" style="padding:8px 10px;" onchange="document.getElementById('sale-student-discount-custom-${i}').value=''; calcDiscount(${i})">
                                 <option value="">-- Không giảm giá --</option>
                             </select>
