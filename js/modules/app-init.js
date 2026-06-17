@@ -285,6 +285,7 @@ async function syncToGreenPool(studentData) {
         const paidAmount = parseInt(paymentInfo.paidAmount) || originalAmount;
         const payMethod = paymentInfo.payMethod || 'cash';
         const discountCode = paymentInfo.discountCode || '';
+        const isGpCode = paymentInfo.isGpCode || false;
         const saleGpId = gpSale?.id ? String(gpSale.id) : '';
         const gpSiteId = GP_API.siteMap[currentBranchId] || 2;
         const gpGender = (gender === 'Nữ' || gender === 'female') ? 2 : 1;
@@ -2059,21 +2060,33 @@ document.addEventListener('DOMContentLoaded', () => {
         el.value = raw.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
     };
 
-    // Tính giảm giá tự động: GIAM500K hoặc GIAM20%
+    // Tính giảm giá tự động: từ dropdown hoặc nhập tay (GIAM500K, GIAM20%)
     window.calcDiscount = function(idx) {
         const totalEl = document.getElementById(`sale-student-total-${idx}`);
         const paidEl = document.getElementById(`sale-student-paid-${idx}`);
-        const discountEl = document.getElementById(`sale-student-discount-${idx}`);
+        const sel = document.getElementById(`sale-student-discount-${idx}`);
+        const customEl = document.getElementById(`sale-student-discount-custom-${idx}`);
         const previewEl = document.getElementById(`sale-discount-preview-${idx}`);
-        if (!totalEl || !paidEl || !discountEl) return;
+        if (!totalEl || !paidEl) return;
 
         const totalRaw = parseInt(totalEl.value.replace(/\./g, '')) || 0;
-        const code = discountEl.value.trim().toUpperCase();
+
+        // Lấy giá trị discount: ưu tiên custom input, fallback dropdown
+        let code = '';
+        let dropdownValue = 0;
+        let dropdownType = '';
+        if (customEl && customEl.value.trim()) {
+            code = customEl.value.trim().toUpperCase();
+        } else if (sel && sel.value) {
+            code = sel.value;
+            const selOpt = sel.selectedOptions?.[0];
+            dropdownType = selOpt?.dataset?.type || '';
+            dropdownValue = parseInt(selOpt?.dataset?.value) || 0;
+        }
 
         if (!totalRaw || !code) {
             if (previewEl) previewEl.style.display = 'none';
             if (!code && totalRaw) {
-                // Không có mã → thanh toán = tổng tiền
                 paidEl.value = String(totalRaw).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
             }
             return;
@@ -2083,15 +2096,24 @@ document.addEventListener('DOMContentLoaded', () => {
         let discountLabel = '';
 
         // Mã đặc biệt: COMBO HB → giảm cố định 1.000.000đ
-        const specialCodes = {
-            'COMBO HB': 1000000
-        };
+        const specialCodes = { 'COMBO HB': 1000000 };
         if (specialCodes[code]) {
             discountAmount = specialCodes[code];
             discountLabel = discountAmount.toLocaleString('vi-VN') + 'đ';
         }
 
-        // Dạng 1: GIAM500K, GIAM1500K, etc.
+        // Từ dropdown (đã có type/value)
+        if (!discountAmount && dropdownValue > 0) {
+            if (dropdownType === 'percent') {
+                discountAmount = Math.round(totalRaw * dropdownValue / 100);
+                discountLabel = dropdownValue + '% = ' + discountAmount.toLocaleString('vi-VN') + 'đ';
+            } else if (dropdownType === 'fixed') {
+                discountAmount = dropdownValue;
+                discountLabel = discountAmount.toLocaleString('vi-VN') + 'đ';
+            }
+        }
+
+        // 1. Parse từ mã nhập tay: GIAM500K
         if (!discountAmount) {
             const matchK = code.match(/^GIAM(\d+)K$/);
             if (matchK) {
@@ -2100,13 +2122,22 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // Dạng 2: GIAM20%, GIAM5%, etc.
+        // 2. Parse từ mã nhập tay: GIAM20%
         if (!discountAmount) {
             const matchP = code.match(/^GIAM(\d+)%$/);
             if (matchP) {
                 const pct = parseInt(matchP[1]);
                 discountAmount = Math.round(totalRaw * pct / 100);
                 discountLabel = pct + '% = ' + discountAmount.toLocaleString('vi-VN') + 'đ';
+            }
+        }
+
+        // 3. Auto-normalize: "500K" → "GIAM500K"
+        if (!discountAmount) {
+            const matchShort = code.match(/^(\d+)K$/);
+            if (matchShort) {
+                discountAmount = parseInt(matchShort[1]) * 1000;
+                discountLabel = discountAmount.toLocaleString('vi-VN') + 'đ';
             }
         }
 
@@ -2118,12 +2149,40 @@ document.addEventListener('DOMContentLoaded', () => {
                 previewEl.innerHTML = '<i class="fa-solid fa-tag"></i> Giảm: <b>' + discountLabel + '</b> → Thanh toán: <b>' + paid.toLocaleString('vi-VN') + 'đ</b>';
             }
         } else if (code && !specialCodes[code]) {
-            // Mã không hợp lệ
             if (previewEl) {
                 previewEl.style.display = 'block';
                 previewEl.innerHTML = '⚠️ Mã không đúng định dạng (VD: GIAM500K, GIAM20%, COMBO HB)';
             }
+            if (totalRaw) paidEl.value = String(totalRaw).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
         }
+    };
+
+    // Sync mã giảm giá từ GP (Admin only)
+    window.syncGpDiscounts = async function() {
+        if (currentUserRole !== 'ADMIN') return alert('❌ Chỉ Admin mới được sync!');
+        try {
+            const btn = event?.target?.closest('button');
+            if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Đang sync...'; }
+            const gpSync = firebase.functions().httpsCallable('gpSyncDiscounts');
+            const result = await gpSync({});
+            if (result.data?.success) {
+                alert(`✅ Đã sync ${result.data.totalDiscounts || 0} mã giảm giá từ GP!\n\nĐóng form và mở lại để thấy mã mới.`);
+            } else {
+                alert('⚠️ Sync không thành công: ' + (result.data?.error || 'Unknown'));
+            }
+            if (btn) { btn.disabled = false; btn.innerHTML = '🔄 Sync GP'; }
+        } catch (e) {
+            alert('❌ Lỗi sync: ' + e.message);
+        }
+    };
+
+    // Helper: lấy discount info từ form (dropdown GP hoặc nhập tay)
+    window.getDiscountInfo = function(idx) {
+        const customVal = (document.getElementById(`sale-student-discount-custom-${idx}`)?.value || '').trim().toUpperCase();
+        const sel = document.getElementById(`sale-student-discount-${idx}`);
+        const dropdownVal = sel?.value || '';
+        const isGpCode = !customVal && !!dropdownVal && sel?.selectedOptions?.[0]?.dataset?.gpCode === 'true';
+        return { discountCode: customVal || dropdownVal || '', isGpCode };
     };
 
     // Xử lý chuyển đổi curriculum (Bơi / Lặn / PT)
@@ -2260,8 +2319,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             <input type="text" inputmode="numeric" id="sale-student-total-${i}" placeholder="VD: 3.000.000" style="padding:8px 10px;" oninput="formatMoney(this); calcDiscount(${i})">
                         </div>
                         <div class="form-group flex-1">
-                            <label>Mã giảm giá</label>
-                            <input type="text" id="sale-student-discount-${i}" placeholder="GIAM500K / GIAM20%" style="padding:8px 10px; text-transform:uppercase;" oninput="this.value=this.value.toUpperCase(); calcDiscount(${i})">
+                            <label>Mã giảm giá ${currentUserRole === 'ADMIN' ? '<button type="button" onclick="syncGpDiscounts()" style="margin-left:6px; padding:2px 8px; font-size:10px; border-radius:4px; border:1px solid rgba(59,130,246,0.3); background:rgba(59,130,246,0.08); color:#3b82f6; cursor:pointer;" title="Sync mã giảm từ GP">🔄 Sync GP</button>' : ''}</label>
+                            <select id="sale-student-discount-${i}" class="modern-select" style="padding:8px 10px;" onchange="document.getElementById('sale-student-discount-custom-${i}').value=''; calcDiscount(${i})">
+                                <option value="">-- Không giảm giá --</option>
+                            </select>
+                            <input type="text" id="sale-student-discount-custom-${i}" placeholder="Hoặc nhập: GIAM500K" style="margin-top:4px; padding:6px 10px; font-size:12px; border:1px dashed var(--border-color); border-radius:6px;" oninput="if(this.value.trim()){document.getElementById('sale-student-discount-${i}').value='';} calcDiscount(${i})">
                         </div>
                     </div>
                     <div id="sale-discount-preview-${i}" style="display:none; padding:6px 10px; margin-bottom:8px; border-radius:8px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.15); font-size:12px; color:#ef4444;"></div>
@@ -2303,6 +2365,97 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>`;
         }
         container.innerHTML = html;
+
+        // Populate discount dropdowns — mã giảm từ GP (Firestore) hoặc fallback hardcode
+        (async () => {
+            const gpSiteId = GP_API.siteMap[currentBranchId] || 2;
+            let gpDiscounts = null;
+            try {
+                const cfgDoc = await db.collection('config').doc('gp_discounts').get();
+                if (cfgDoc.exists) {
+                    const siteData = cfgDoc.data()?.sites?.[String(gpSiteId)];
+                    if (siteData?.discounts?.length > 0) {
+                        gpDiscounts = siteData.discounts;
+                        console.log(`✅ [Discount] GP: ${gpDiscounts.length} mã cho ${siteData.label} (site ${gpSiteId})`);
+                    }
+                }
+            } catch (e) { console.warn('[Discount] Load GP failed:', e.message); }
+
+            const fallbackPct = [
+                { label: 'Giảm 10%', code: 'GIAM10', type: 'percent', value: 10 },
+                { label: 'Giảm 15%', code: 'GIAM15', type: 'percent', value: 15 },
+                { label: 'Giảm 20%', code: 'GIAM20', type: 'percent', value: 20 },
+                { label: 'Giảm 25%', code: 'GIAM25', type: 'percent', value: 25 },
+                { label: 'Giảm 30%', code: 'GIAM30', type: 'percent', value: 30 },
+                { label: 'Giảm 40%', code: 'GIAM40', type: 'percent', value: 40 },
+                { label: 'Giảm 50%', code: 'GIAM50', type: 'percent', value: 50 },
+            ];
+            const fallbackFixed = {
+                'branch_nguyen_co_thach': [
+                    { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
+                    { label: 'Giảm 800K', code: 'GIAM800K', type: 'fixed', value: 800000 },
+                    { label: 'Giảm 900K', code: 'GIAM900K', type: 'fixed', value: 900000 },
+                    { label: 'Giảm 1.200K', code: 'GIAM1200K', type: 'fixed', value: 1200000 },
+                ],
+                'branch_cung_ttdn': [
+                    { label: 'Giảm 200K', code: 'GIAM200K', type: 'fixed', value: 200000 },
+                    { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
+                    { label: 'Giảm 600K', code: 'GIAM600K', type: 'fixed', value: 600000 },
+                    { label: 'Giảm 700K', code: 'GIAM700K', type: 'fixed', value: 700000 },
+                    { label: 'Giảm 800K', code: 'GIAM800K', type: 'fixed', value: 800000 },
+                    { label: 'Giảm 900K', code: 'GIAM900K', type: 'fixed', value: 900000 },
+                    { label: 'Giảm 1.000K', code: 'GIAM1000K', type: 'fixed', value: 1000000 },
+                    { label: 'Giảm 1.200K', code: 'GIAM1200K', type: 'fixed', value: 1200000 },
+                    { label: 'Giảm 1.500K', code: 'GIAM1500K', type: 'fixed', value: 1500000 },
+                ],
+                'branch_thuy_khue': [
+                    { label: 'Giảm 900K', code: 'GIAM900K', type: 'fixed', value: 900000 },
+                    { label: 'Giảm 1.200K', code: 'GIAM1200K', type: 'fixed', value: 1200000 },
+                ],
+                'branch_hoang_mai': [
+                    { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
+                    { label: 'Giảm 800K', code: 'GIAM800K', type: 'fixed', value: 800000 },
+                    { label: 'Giảm 900K', code: 'GIAM900K', type: 'fixed', value: 900000 },
+                    { label: 'Giảm 1.200K', code: 'GIAM1200K', type: 'fixed', value: 1200000 },
+                ],
+                'branch_thanh_tri': [
+                    { label: 'Giảm 200K', code: 'GIAM200K', type: 'fixed', value: 200000 },
+                    { label: 'Giảm 500K', code: 'GIAM500K', type: 'fixed', value: 500000 },
+                    { label: 'Giảm 1.000K', code: 'GIAM1000K', type: 'fixed', value: 1000000 },
+                ],
+            };
+
+            for (let i = 1; i <= count; i++) {
+                const sel = document.getElementById(`sale-student-discount-${i}`);
+                if (!sel) continue;
+                if (gpDiscounts) {
+                    const pctList = gpDiscounts.filter(d => d.type === 'percent');
+                    const fixedList = gpDiscounts.filter(d => d.type === 'fixed');
+                    if (pctList.length > 0) {
+                        const grp = document.createElement('optgroup');
+                        grp.label = '── Giảm % (GP) ──';
+                        pctList.forEach(d => { const opt = document.createElement('option'); opt.value = d.code; opt.textContent = d.label; opt.dataset.type = d.type; opt.dataset.value = d.value; opt.dataset.gpCode = 'true'; grp.appendChild(opt); });
+                        sel.appendChild(grp);
+                    }
+                    if (fixedList.length > 0) {
+                        const grp = document.createElement('optgroup');
+                        grp.label = '── Giảm số tiền (GP) ──';
+                        fixedList.forEach(d => { const opt = document.createElement('option'); opt.value = d.code; opt.textContent = `${d.label} (${d.code})`; opt.dataset.type = d.type; opt.dataset.value = d.value; opt.dataset.gpCode = 'true'; grp.appendChild(opt); });
+                        sel.appendChild(grp);
+                    }
+                } else {
+                    const grpPct = document.createElement('optgroup'); grpPct.label = '── Giảm % ──';
+                    fallbackPct.forEach(d => { const opt = document.createElement('option'); opt.value = d.code; opt.textContent = d.label; opt.dataset.type = d.type; opt.dataset.value = d.value; grpPct.appendChild(opt); });
+                    sel.appendChild(grpPct);
+                    const branchFixed = fallbackFixed[currentBranchId] || [];
+                    if (branchFixed.length > 0) {
+                        const grpFixed = document.createElement('optgroup'); grpFixed.label = '── Giảm số tiền ──';
+                        branchFixed.forEach(d => { const opt = document.createElement('option'); opt.value = d.code; opt.textContent = d.label; opt.dataset.type = d.type; opt.dataset.value = d.value; grpFixed.appendChild(opt); });
+                        sel.appendChild(grpFixed);
+                    }
+                }
+            }
+        })();
     };
 
     window.showSaleTab = function (idx) {
@@ -2428,11 +2581,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     // ===== ĐỒNG BỘ SANG GREENPOOL (tự tuyển) =====
                     try {
+                        const _diSelf = getDiscountInfo(1);
                         const selfPaymentInfo = {
                             totalAmount: (document.getElementById('sale-student-total-1')?.value || '0').replace(/\./g, ''),
                             paidAmount: (document.getElementById('sale-student-paid-1')?.value || '').replace(/\./g, ''),
                             payMethod: document.getElementById('sale-student-paymethod-1')?.value || 'cash',
-                            discountCode: document.getElementById('sale-student-discount-1')?.value || ''
+                            discountCode: _diSelf.discountCode,
+                            isGpCode: _diSelf.isGpCode
                         };
                         console.log('🔄 [GP] Bắt đầu đồng bộ tự tuyển:', { name, phone, rawCurriculum, contractNumber });
                         const gpResult = await syncToGreenPool({
@@ -2564,11 +2719,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     // Chỉ advance queue khi là HV CUỐI CÙNG trong lượt
                     const skipQueue = (!isLastStudent && !isDiving && !isExceptionForThisStudent);
                     // Thông tin thanh toán
+                    const _diQ = getDiscountInfo(i);
                     const paymentInfo = {
                         totalAmount: (document.getElementById(`sale-student-total-${i}`)?.value || '0').replace(/\./g, ''),
                         paidAmount: (document.getElementById(`sale-student-paid-${i}`)?.value || '').replace(/\./g, ''),
                         payMethod: document.getElementById(`sale-student-paymethod-${i}`)?.value || 'cash',
-                        discountCode: document.getElementById(`sale-student-discount-${i}`)?.value || ''
+                        discountCode: _diQ.discountCode,
+                        isGpCode: _diQ.isGpCode
                     };
                     await saleAssignStudent(name, phone, gender, ageCategory, contractNumber, finalTeacherId, curriculum, ptSessions, isExceptionForThisStudent, age, isTest, isDiving, skipQueue, paymentInfo, rawCurriculum);
                 }

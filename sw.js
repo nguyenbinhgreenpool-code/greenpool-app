@@ -30,7 +30,7 @@ messaging.onBackgroundMessage((payload) => {
 });
 
 // ===================== CACHE STRATEGY ===================== //
-const CACHE_VERSION = '7.8';
+const CACHE_VERSION = '8.0';
 const CACHE_NAME = 'greenpool-v' + CACHE_VERSION;
 
 // Assets cần pre-cache khi install (load offline được)
