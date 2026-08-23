@@ -1,4 +1,4 @@
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
@@ -21,10 +21,15 @@ exports.sendPushNotification = onDocumentCreated("notifications/{notifId}", asyn
     if (!toUserId) return;
 
     try {
-        const userDoc = await db.collection("users").doc(toUserId).get();
-        if (!userDoc.exists) return;
-
-        const fcmTokens = userDoc.data().fcmTokens || [];
+        // Ưu tiên đọc tokens từ notification data (nếu đã denormalize)
+        let tokens = data.fcmTokens || [];
+        if (!tokens.length) {
+            // Fallback: đọc từ user doc
+            const userDoc = await db.collection("users").doc(toUserId).get();
+            if (!userDoc.exists) return;
+            tokens = userDoc.data()?.fcmTokens || [];
+        }
+        const fcmTokens = tokens;
         if (fcmTokens.length === 0) return;
 
         // Tạo title theo type
@@ -100,6 +105,27 @@ exports.sendPushNotification = onDocumentCreated("notifications/{notifId}", asyn
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
 
+/**
+ * Cloud Function: Khi user document thay đổi → sync role vào Auth Custom Claims
+ * Mục đích: Giảm Firestore reads trong Security Rules (getUserRole() đọc token thay vì get())
+ */
+exports.syncUserRoleClaim = onDocumentWritten("users/{userId}", async (event) => {
+    const after = event.data?.after?.data();
+    const before = event.data?.before?.data();
+    
+    // Chỉ sync khi role thay đổi hoặc user mới tạo
+    if (!after?.role) return;
+    if (before?.role === after.role) return;
+    
+    try {
+        const auth = getAuth();
+        await auth.setCustomUserClaims(event.params.userId, { role: after.role });
+        console.log(`✅ Synced custom claim: ${event.params.userId} → role=${after.role}`);
+    } catch (err) {
+        console.error(`❌ Failed to sync custom claim for ${event.params.userId}:`, err.message);
+    }
+});
+
 exports.adminResetPassword = onCall(async (request) => {
     // Kiểm tra đã đăng nhập
     if (!request.auth) {
@@ -169,6 +195,150 @@ exports.gpResetSync = onCall({ maxInstances: 1 }, async (request) => {
     return { success: true, message: `${action === 'update' ? 'Updated' : 'Reset'} ${snap.size} docs for HĐ "${contractNumber}"` };
 });
 
+// ============ GREENPOOL: TÌM SALE TRÊN GP (Server-side) ============ //
+// Tìm Sale trên GP bằng Admin API (không bị CORS như client-side)
+// Ưu tiên: (1) SĐT cùng site → (2) SĐT cross-site → (3) Tên cùng site
+const GP_ADMIN_PHONE = '0332143334';
+const GP_ADMIN_PASSWORD = '123456a@';
+const GP_BASE_URL = 'https://quanly.greenpool.vn/api';
+
+let _gpAdminTokenCache = null;
+let _gpAdminTokenExpiry = 0;
+
+async function gpAdminLogin() {
+    if (_gpAdminTokenCache && Date.now() < _gpAdminTokenExpiry) return _gpAdminTokenCache;
+    try {
+        const res = await fetch(`${GP_BASE_URL}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ phone: GP_ADMIN_PHONE, password: GP_ADMIN_PASSWORD })
+        });
+        const data = await res.json();
+        if (data.status === 'success' && data.authorisation?.token) {
+            _gpAdminTokenCache = data.authorisation.token;
+            _gpAdminTokenExpiry = Date.now() + 50 * 60 * 1000; // 50 phút
+            return _gpAdminTokenCache;
+        }
+        console.error('[GP] Admin login failed:', JSON.stringify(data).substring(0, 200));
+        return null;
+    } catch (e) {
+        console.error('[GP] Admin login error:', e.message);
+        return null;
+    }
+}
+
+// Cache danh sách Sale GP (refresh mỗi 10 phút)
+let _gpSaleListCache = null;
+let _gpSaleListExpiry = 0;
+
+async function getGpSaleList() {
+    if (_gpSaleListCache && Date.now() < _gpSaleListExpiry) return _gpSaleListCache;
+    const token = await gpAdminLogin();
+    if (!token) return [];
+    try {
+        const res = await fetch(`${GP_BASE_URL}/admin/user?role=sale&has_total=false`, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
+        });
+        const data = await res.json();
+        let users = data?.data || data || [];
+        if (!Array.isArray(users)) users = [];
+        _gpSaleListCache = users;
+        _gpSaleListExpiry = Date.now() + 10 * 60 * 1000; // Cache 10 phút
+        console.log(`[GP] Loaded ${users.length} sale users from GP Admin API`);
+        return users;
+    } catch (e) {
+        console.error('[GP] Failed to fetch sale list:', e.message);
+        return [];
+    }
+}
+
+/**
+ * Tìm Sale trên GP bằng SĐT hoặc tên
+ * @param {Object} saleInfo - { name: string, phone: string }
+ * @param {number} siteId - GP site_id
+ * @returns {Object|null} - { id, phone, fullname } hoặc null
+ */
+async function findSaleOnGP(saleInfo, siteId) {
+    const { name, phone } = saleInfo || {};
+    if (!phone && !name) return null;
+
+    const allSales = await getGpSaleList();
+    if (allSales.length === 0) {
+        console.warn('[GP] ⚠️ Sale list empty → cannot match');
+        return null;
+    }
+
+    const sameSite = allSales.filter(u => u.site_id === siteId);
+    const searchList = sameSite.length > 0 ? sameSite : allSales;
+
+    // BƯỚC 1: Tìm SĐT cùng site (chính xác nhất)
+    if (phone) {
+        const byPhone = searchList.find(u => u.phone === phone);
+        if (byPhone) {
+            console.log(`[GP] ✅ Match Sale by phone (same-site): ${phone} → "${byPhone.fullname}" (ID:${byPhone.id}, site:${byPhone.site_id})`);
+            return { id: byPhone.id, phone: byPhone.phone, fullname: byPhone.fullname };
+        }
+    }
+
+    // BƯỚC 2: Tìm TÊN cùng site (exact keyword match — ALL keywords phải khớp)
+    if (name) {
+        const nameUpper = name.toUpperCase().trim();
+        const ignoreWords = ['SALE', 'ADMIN', 'MANAGER', 'CHUYÊN', 'VIÊN', 'NHÂN', 'TEST'];
+        const keywords = nameUpper.split(/\s+/).filter(w => w.length >= 2 && !ignoreWords.includes(w));
+        console.log(`[GP] 🔍 Matching Sale by name: "${name}" → keywords: [${keywords.join(', ')}] (site:${siteId})`);
+
+        if (keywords.length > 0) {
+            // Exact match: ALL keywords phải khớp
+            const exactMatches = [];
+            for (const u of searchList) {
+                const gpName = (u.fullname || '').toUpperCase();
+                if (keywords.every(kw => gpName.includes(kw))) exactMatches.push(u);
+            }
+            if (exactMatches.length === 1) {
+                const pick = exactMatches[0];
+                console.log(`[GP] ✅ Match Sale by name (exact, same-site): "${name}" → "${pick.fullname}" (ID:${pick.id})`);
+                return { id: pick.id, phone: pick.phone, fullname: pick.fullname };
+            }
+            if (exactMatches.length > 1) {
+                // Nhiều hơn 1 match → chọn người có nhiều keyword khớp nhất + tên ngắn nhất (gần nhất)
+                exactMatches.sort((a, b) => (a.fullname || '').length - (b.fullname || '').length);
+                const pick = exactMatches[0];
+                console.log(`[GP] ✅ Match Sale by name (best of ${exactMatches.length}, same-site): "${name}" → "${pick.fullname}" (ID:${pick.id})`);
+                return { id: pick.id, phone: pick.phone, fullname: pick.fullname };
+            }
+
+            // Partial match: tính score, yêu cầu ≥50% keywords khớp
+            let bestMatch = null;
+            let bestScore = 0;
+            for (const u of searchList) {
+                const gpName = (u.fullname || '').toUpperCase();
+                const matchCount = keywords.filter(kw => gpName.includes(kw)).length;
+                const score = matchCount / keywords.length;
+                if (score > bestScore && score >= 0.5) {
+                    bestScore = score;
+                    bestMatch = u;
+                }
+            }
+            if (bestMatch) {
+                console.log(`[GP] ✅ Match Sale by name (partial ${Math.round(bestScore * 100)}%, same-site): "${name}" → "${bestMatch.fullname}" (ID:${bestMatch.id})`);
+                return { id: bestMatch.id, phone: bestMatch.phone, fullname: bestMatch.fullname };
+            }
+        }
+    }
+
+    // BƯỚC 3: Cross-site phone (cuối cùng, có cảnh báo)
+    if (phone) {
+        const byPhoneAll = allSales.find(u => u.phone === phone);
+        if (byPhoneAll) {
+            console.warn(`[GP] ⚠️ Match Sale by phone CROSS-SITE: ${phone} → "${byPhoneAll.fullname}" (site:${byPhoneAll.site_id}) ≠ target ${siteId}`);
+            return { id: byPhoneAll.id, phone: byPhoneAll.phone, fullname: byPhoneAll.fullname };
+        }
+    }
+
+    console.warn(`[GP] ⚠️ Không match Sale nào cho name="${name}", phone="${phone}" tại site ${siteId}`);
+    return null;
+}
+
 // ============ GREENPOOL PROXY (External API v2) ============ //
 // Tạo subscribe trên GreenPool qua External API (API Key, không cần login)
 exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
@@ -176,6 +346,7 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
         throw new HttpsError("unauthenticated", "Chưa đăng nhập.");
     }
     const { personInfo, subscribeInfo, paymentInfo, branchId: clientBranchId, customerSource } = request.data;
+    const saleInfo = request.data.saleInfo || {};  // { name, phone } từ client
 
     if (!personInfo || !subscribeInfo) {
         throw new HttpsError("invalid-argument", "Thiếu personInfo hoặc subscribeInfo.");
@@ -193,11 +364,80 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
     const siteId = subscribeInfo.site_id || paymentInfo?.site_id || 2;
     const branchId = clientBranchId || '';
     const phone = personInfo.phone || '';
-    // Fallback user_id theo site (user phải ĐÚNG SITE thì GP mới apply discount)
-    const SITE_USER_IDS = { 1: 42, 2: 4225, 3: 4251, 4: 4245, 5: 4240 };
-    const userId = parseInt(subscribeInfo.support_user_id) || SITE_USER_IDS[siteId] || 4225;
 
-    console.log(`[GP-v2] Called by ${request.auth.uid}, phone=${phone}, site=${siteId}, contract=${contractNumber}, user_id=${userId}`);
+    // ========== TÌM SALE GP (server-side) ==========
+    // Ưu tiên: (1) support_user_id từ client → (2) saleInfo (name/phone) → (3) Firestore user → (4) site default
+    const SITE_USER_IDS = { 1: 4267, 2: 4225, 3: 4251, 4: 4245, 5: 4243 };
+    let userId = parseInt(subscribeInfo.support_user_id) || 0;
+    let saleMatchMethod = userId ? 'client_support_user_id' : '';
+    let usedFallback = false;
+
+    if (!userId) {
+        // Bước 1: Tìm từ saleInfo (name + phone gửi từ client)
+        if (saleInfo.phone || saleInfo.name) {
+            try {
+                const gpSale = await findSaleOnGP(saleInfo, siteId);
+                if (gpSale) {
+                    userId = gpSale.id;
+                    saleMatchMethod = `server_match: "${gpSale.fullname}" (${gpSale.phone || 'no-phone'})`;
+                }
+            } catch (e) {
+                console.warn(`[GP-v2] findSaleOnGP error: ${e.message}`);
+            }
+        }
+
+        // Bước 2: Nếu vẫn chưa có, thử lấy phone từ Firestore user doc
+        if (!userId && request.auth?.uid) {
+            try {
+                const callerDoc = await db.collection('users').doc(request.auth.uid).get();
+                if (callerDoc.exists) {
+                    const callerData = callerDoc.data();
+                    const callerPhone = callerData.phone || callerData.phoneNumber || '';
+                    const callerName = callerData.name || '';
+                    if (callerPhone || callerName) {
+                        const gpSale = await findSaleOnGP({ name: callerName, phone: callerPhone }, siteId);
+                        if (gpSale) {
+                            userId = gpSale.id;
+                            saleMatchMethod = `server_firestore_user: "${gpSale.fullname}" (${gpSale.phone || 'no-phone'})`;
+                        }
+                    }
+                }
+            } catch (e) { /* non-blocking */ }
+        }
+
+        // Bước 3: Fallback cuối cùng — dùng user site mặc định
+        if (!userId) {
+            userId = SITE_USER_IDS[siteId] || 4225;
+            usedFallback = true;
+            saleMatchMethod = `⚠️ FALLBACK site default: ${userId}`;
+            console.warn(`[GP-v2] ⚠️ FALLBACK: dùng user site mặc định ${userId} vì không tìm được Sale name="${saleInfo.name}" phone="${saleInfo.phone}"`);
+        }
+    }
+
+    console.log(`[GP-v2] Called by ${request.auth.uid}, phone=${phone}, site=${siteId}, contract=${contractNumber}, user_id=${userId}, match=${saleMatchMethod}`);
+
+    // ========== CHỐNG SPAM: Firestore Lock ==========
+    // Khi user bấm nút liên tục, nhiều request chạy đồng thời
+    // Lock bằng atomic create() → chỉ request đầu tiên được xử lý
+    const lockId = `${contractNumber}_${branchId}_${phone}`.replace(/[\/\.]/g, '_');
+    const lockRef = db.collection('_gpSyncLocks').doc(lockId);
+    let lockAcquired = false;
+    if (contractNumber) {
+        try {
+            await lockRef.create({
+                createdAt: FieldValue.serverTimestamp(),
+                uid: request.auth.uid,
+                contract: contractNumber,
+                phone: phone
+            });
+            lockAcquired = true;
+            console.log(`[GP-v2] 🔒 Lock acquired: ${lockId}`);
+        } catch (e) {
+            // create() fails if doc already exists → another request is processing
+            console.warn(`[GP-v2] ⚠️ Lock exists: ${lockId} → chặn request trùng`);
+            return { success: false, reason: 'already_processing', error: 'already_processing', message: `HĐ "${contractNumber}" đang được đồng bộ, vui lòng chờ.` };
+        }
+    }
 
     try {
 
@@ -255,7 +495,19 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
         }
 
         // ========== BƯỚC 2: TẠO SUBSCRIBE (External API) ==========
-        const rawDiscountCode = (paymentInfo?.discount_code || paymentInfo?.discount_value || '').trim();
+        let rawDiscountCode = (paymentInfo?.discount_code || paymentInfo?.discount_value || '').trim();
+
+        // Auto-detect discount khi Sale chỉ sửa tiền thanh toán mà không chọn mã giảm giá
+        if (!rawDiscountCode) {
+            // App gửi total_amount HOẶC original_amount → check cả 2
+            const origAmt = parseInt(paymentInfo?.original_amount) || parseInt(paymentInfo?.total_amount) || 0;
+            const paidAmt = parseInt(paymentInfo?.pay_amount) || 0;
+            if (origAmt > 0 && paidAmt > 0 && origAmt > paidAmt) {
+                const diffK = Math.round((origAmt - paidAmt) / 1000);
+                rawDiscountCode = `GIAM${diffK}K`;
+                console.log(`[GP-v2] ⚡ Auto-detect discount: original=${origAmt}, paid=${paidAmt}, diff=${diffK}K → "${rawDiscountCode}"`);
+            }
+        }
 
         // === MAP DISCOUNT CODE THEO SITE ===
         // App gửi mã %: GIAM15 → GIAM15_NCT
@@ -267,84 +519,147 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
         // Site 1=NCT, 2=CTT, 3=TK, 4=HM(Hoàng Mai), 5=TT(Thanh Trì)
         // ⚠️ Chỉ dùng mã ĐÃ TỒN TẠI ĐÚNG SITE trên GP (tạo qua GP admin web)
         const FIXED_DISCOUNT_MAP = {
-            1: { 500: 'NCT_G500K', 525: 'NCT_G525K', 800: 'NCT_G800K', 900: 'NCT_G900K', 1000: 'NCT_G1000K', 1200: 'NCT_G1200K' },
-            2: { 200: 'CTT_G200K', 500: 'CTT_G500K', 600: 'GIAM600K', 700: 'GIAM700K', 800: 'CTT_G800K', 900: 'CTT_G900K', 1000: 'GIAM1TR', 1200: 'CTT_G1200K', 1500: 'GIAM1TR5' },
-            3: { 900: 'GIAM900K', 1200: 'GIAM1200K' },
-            4: { 500: 'TT_G500K', 800: 'TT_G800K', 900: 'TT_G900K', 1200: 'TT_G1200K' },  // HM: mã TT_ là tên cũ trên GP
-            5: { 200: '-200K', 500: '-500k', 1000: 'COMBO HB' }  // Thanh Trì
+            // Site 1: NCT (Nguyễn Cơ Thạch) — updated 24/6/2026 from GP sync
+            1: { 500: 'NCT_G500K', 525: 'GIAM525K1', 800: 'NCT_G800K', 900: 'NCT_G900K', 1000: 'VCG1000', 1200: 'NCT_G1200K', 1500: 'VCG1500' },
+            // Site 2: CTT (Cung TTDN) — updated 24/6/2026
+            2: { 200: 'CTT_G200K', 500: 'GIAM500K', 600: 'GIAM600K', 700: 'GIAM700K', 800: 'GIAM800K', 900: 'CTT_G900K', 1000: 'GIAM1TR', 1200: 'GIAM1TR2', 1500: 'GIAM1TR5', 2000: '3THANGT1' },
+            // Site 3: TK (Thuỷ Khuê) — updated 24/6/2026
+            3: { 525: 'GIAM525K', 800: 'GIẢM 800', 900: '900K', 1000: '1TR', 1200: '1TR2' },
+            // Site 4: HM (Hoàng Mai) — updated 24/6/2026
+            4: { 500: 'TT_G500K', 525: 'TT_G525K', 800: 'TT_G800K', 900: 'TT_G900K', 1000: '1000000', 1200: 'TT_G1200K', 1500: '1500000', 2000: '2000000' },
+            // Site 5: TTRI (Thanh Trì) — updated 24/6/2026
+            5: { 1000: 'COMBO HB', 1500: '-1TR500', 2000: 'TRI ÂN 2TR', 2500: 'CA HB' },
         };
 
         let discountCode = rawDiscountCode;
         let discountWarning = '';  // Cảnh báo khi mã bị drop
 
-        if (paymentInfo?.isGpCode && discountCode) {
-            // Mã GP gốc từ dropdown (đã sync từ GP) → gửi thẳng, KHÔNG mapping
-            console.log(`[GP-v2] GP code from dropdown: "${discountCode}" (skip mapping)`);
-        } else if (discountCode && STANDARD_CODES.includes(discountCode)) {
-            // Mã % chuẩn → thêm suffix site (GIAM15 → GIAM15_NCT)
-            const suffix = SITE_SUFFIX[siteId] || '_CTT';
-            discountCode = discountCode + suffix;
-            console.log(`[GP-v2] Discount: "${rawDiscountCode}" → "${discountCode}" (site ${siteId})`);
-        } else if (discountCode && /^GIAM(\d+)K$/i.test(discountCode)) {
-            // Mã giảm số tiền (GIAM500K, GIAM900K...) → tra bảng mã GP
-            const kMatch = discountCode.match(/^GIAM(\d+)K$/i);
-            const amountK = parseInt(kMatch[1]);
-            const siteMap = FIXED_DISCOUNT_MAP[siteId] || {};
-            const gpCode = siteMap[amountK];
-            if (gpCode) {
-                discountCode = gpCode;
-                console.log(`[GP-v2] Fixed discount: "${rawDiscountCode}" → "${discountCode}" (site ${siteId})`);
-            } else {
-                console.warn(`[GP-v2] ⚠️ Mã "${rawDiscountCode}" KHÔNG CÓ mapping cho site ${siteId}`);
-                discountWarning = `Mã "${rawDiscountCode}" không có trên GP cho cơ sở này (site ${siteId}). HĐ sẽ có nợ.`;
-                discountCode = '';
-            }
-        } else if (discountCode && /^(\d+)%$/.test(discountCode)) {
-            // Mã dạng "15%", "20%", "10%" → GIAM15_NCT, GIAM20_CTT...
-            const pct = discountCode.match(/^(\d+)%$/)[1];
-            const suffix = SITE_SUFFIX[siteId] || '_CTT';
-            discountCode = `GIAM${pct}${suffix}`;
-            console.log(`[GP-v2] Percent discount: "${rawDiscountCode}" → "${discountCode}" (site ${siteId})`);
-        } else if (discountCode && /^GIAM(\d+)%/i.test(discountCode)) {
-            // Mã dạng "GIAM15%", "GIAM20%TT", "GIAM25%" → GIAM15_NCT, GIAM20_CTT...
-            const pct = discountCode.match(/^GIAM(\d+)%/i)[1];
-            const suffix = SITE_SUFFIX[siteId] || '_CTT';
-            discountCode = `GIAM${pct}${suffix}`;
-            console.log(`[GP-v2] Percent discount: "${rawDiscountCode}" → "${discountCode}" (site ${siteId})`);
-        } else if (discountCode && /^\d+$/.test(discountCode) && parseInt(discountCode) >= 100000) {
-            // Mã dạng số thuần "500000", "1000000"... → chuyển thành K rồi tra bảng
-            const amountK = Math.round(parseInt(discountCode) / 1000);
-            const siteMap = FIXED_DISCOUNT_MAP[siteId] || {};
-            const gpCode = siteMap[amountK];
-            if (gpCode) {
-                discountCode = gpCode;
-                console.log(`[GP-v2] Numeric discount: "${rawDiscountCode}" → ${amountK}K → "${discountCode}" (site ${siteId})`);
-            } else {
-                console.warn(`[GP-v2] ⚠️ Numeric discount "${rawDiscountCode}" (${amountK}K) KHÔNG CÓ mapping cho site ${siteId}`);
-                discountWarning = `Mã "${rawDiscountCode}" (${amountK}K) không có trên GP cho cơ sở này (site ${siteId}). HĐ sẽ có nợ.`;
-                discountCode = '';
-            }
-        } else if (discountCode && /^(\d+)K$/i.test(discountCode)) {
-            // Mã dạng shorthand "500K", "200K", "1200K"... (Sale nhập tắt, không có GIAM)
-            const kMatch = discountCode.match(/^(\d+)K$/i);
-            const amountK = parseInt(kMatch[1]);
-            const siteMap = FIXED_DISCOUNT_MAP[siteId] || {};
-            const gpCode = siteMap[amountK];
-            if (gpCode) {
-                discountCode = gpCode;
-                console.log(`[GP-v2] Shorthand discount: "${rawDiscountCode}" → ${amountK}K → "${discountCode}" (site ${siteId})`);
-            } else {
-                console.warn(`[GP-v2] ⚠️ Shorthand discount "${rawDiscountCode}" (${amountK}K) KHÔNG CÓ mapping cho site ${siteId}`);
-                discountWarning = `Mã "${rawDiscountCode}" (${amountK}K) không có trên GP cho cơ sở này (site ${siteId}). HĐ sẽ có nợ.`;
-                discountCode = '';
-            }
+        // ✅ BYPASS: nếu mã được chọn từ dropdown GP (isGpCode=true) → gửi thẳng RAW, KHÔNG normalize
+        const isGpCode = !!paymentInfo?.isGpCode;
+        if (discountCode && isGpCode) {
+            // Mã từ GP dropdown → giữ NGUYÊN (kể cả dấu tiếng Việt, space, ký tự đặc biệt)
+            // VD: "GIẢM 20%", "COMBO HB", "-1TR500", "HB 20%"
+            console.log(`[GP-v2] ✅ GP dropdown code → gửi thẳng RAW: "${discountCode}" (site ${siteId})`);
         } else if (discountCode) {
-            console.warn(`[GP-v2] ⚠️ Discount code "${discountCode}" không nhận dạng được`);
-            discountWarning = `Mã "${discountCode}" không nhận dạng được trên GP. HĐ sẽ có nợ.`;
-            discountCode = '';
+            // ✅ NORMALIZE: chỉ cho mã NHẬP TAY — bỏ dấu tiếng Việt, xử lý format
+            // "GIẢM 20%" → "GIAM20%", "Giảm 500K" → "GIAM500K"
+            const removeDiacritics = (str) => str
+                .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // Bỏ combining marks
+                .replace(/đ/gi, 'd')
+                .replace(/Đ/g, 'D');
+            discountCode = removeDiacritics(discountCode).trim().toUpperCase();
+            // "GIAM 20%" → "GIAM20%", "GIAM 500K" → "GIAM500K" (bỏ space)
+            discountCode = discountCode.replace(/^GIAM\s+/i, 'GIAM');
+            // Nếu chỉ là "20%" → "GIAM20%"
+            if (/^\d+%$/.test(discountCode)) {
+                discountCode = 'GIAM' + discountCode;
+            }
+            console.log(`[GP-v2] Discount normalized: "${rawDiscountCode}" → "${discountCode}" (nhập tay)`);
+
+        } else if (discountCode) {
+            // === MAPPING LOGIC (chỉ áp dụng khi Sale nhập tay) ===
+
+            // ✅ VALIDATE: nếu mã có suffix site khác → sửa lại suffix đúng
+            // VD: "CTT_G25" tại site 3 (TK) → phải map lại
+            const currentSuffix = SITE_SUFFIX[siteId] || '';
+            const allSuffixes = Object.values(SITE_SUFFIX);
+            if (allSuffixes.some(s => discountCode.includes(s)) && currentSuffix && !discountCode.includes(currentSuffix)) {
+                console.warn(`[GP-v2] ⚠️ Mã "${discountCode}" thuộc site khác, không đúng site ${siteId} (${currentSuffix}) → sẽ strip suffix và re-map`);
+                const strippedSuffix = allSuffixes.reduce((c, s) => c.replace(s, ''), discountCode);
+                if (STANDARD_CODES.includes(strippedSuffix)) {
+                    discountCode = strippedSuffix;
+                    console.log(`[GP-v2] Stripped to standard: "${discountCode}"`);
+                } else {
+                    console.warn(`[GP-v2] ⚠️ Cannot re-map "${discountCode}" (wrong site) → dropping`);
+                    discountWarning = `Mã "${rawDiscountCode}" thuộc cơ sở khác (không phải site ${siteId}). Đã bỏ mã.`;
+                    discountCode = '';
+                }
+            }
+
+            if (discountCode && STANDARD_CODES.includes(discountCode)) {
+                const suffix = SITE_SUFFIX[siteId] || '_CTT';
+                discountCode = discountCode + suffix;
+                console.log(`[GP-v2] Discount: "${rawDiscountCode}" → "${discountCode}" (site ${siteId})`);
+            } else if (discountCode && /^GIAM(\d+)K$/i.test(discountCode)) {
+                const kMatch = discountCode.match(/^GIAM(\d+)K$/i);
+                const amountK = parseInt(kMatch[1]);
+                const siteMap = FIXED_DISCOUNT_MAP[siteId] || {};
+                const gpCode = siteMap[amountK];
+                if (gpCode) {
+                    discountCode = gpCode;
+                    console.log(`[GP-v2] Fixed discount: "${rawDiscountCode}" → "${discountCode}" (site ${siteId})`);
+                } else {
+                    console.warn(`[GP-v2] ⚠️ Mã "${rawDiscountCode}" KHÔNG CÓ mapping cho site ${siteId}`);
+                    discountWarning = `Mã "${rawDiscountCode}" không có trên GP cho cơ sở này (site ${siteId}). HĐ sẽ có nợ.`;
+                    discountCode = '';
+                }
+            } else if (discountCode && /^GIAM(\d+)%/i.test(discountCode)) {
+                const pct = discountCode.match(/^GIAM(\d+)%/i)[1];
+                const stdCode = `GIAM${pct}`;
+                if (STANDARD_CODES.includes(stdCode)) {
+                    const suffix = SITE_SUFFIX[siteId] || '_CTT';
+                    discountCode = stdCode + suffix;
+                    console.log(`[GP-v2] Percent discount: "${rawDiscountCode}" → "${discountCode}" (site ${siteId})`);
+                } else {
+                    console.warn(`[GP-v2] ⚠️ Percent "${pct}%" không trong STANDARD_CODES`);
+                    discountWarning = `Mã "${rawDiscountCode}" không hỗ trợ trên GP.`;
+                    discountCode = '';
+                }
+            } else if (discountCode && /^\d+$/.test(discountCode) && parseInt(discountCode) >= 100000) {
+                const amountK = Math.round(parseInt(discountCode) / 1000);
+                const siteMap = FIXED_DISCOUNT_MAP[siteId] || {};
+                const gpCode = siteMap[amountK];
+                if (gpCode) {
+                    discountCode = gpCode;
+                    console.log(`[GP-v2] Numeric discount: "${rawDiscountCode}" → ${amountK}K → "${discountCode}" (site ${siteId})`);
+                } else {
+                    console.warn(`[GP-v2] ⚠️ Numeric discount "${rawDiscountCode}" (${amountK}K) KHÔNG CÓ mapping cho site ${siteId}`);
+                    discountWarning = `Mã "${rawDiscountCode}" (${amountK}K) không có trên GP cho cơ sở này (site ${siteId}). HĐ sẽ có nợ.`;
+                    discountCode = '';
+                }
+            } else if (discountCode && /^(\d+)K$/i.test(discountCode)) {
+                const kMatch = discountCode.match(/^(\d+)K$/i);
+                const amountK = parseInt(kMatch[1]);
+                const siteMap = FIXED_DISCOUNT_MAP[siteId] || {};
+                const gpCode = siteMap[amountK];
+                if (gpCode) {
+                    discountCode = gpCode;
+                    console.log(`[GP-v2] Shorthand discount: "${rawDiscountCode}" → ${amountK}K → "${discountCode}" (site ${siteId})`);
+                } else {
+                    console.warn(`[GP-v2] ⚠️ Shorthand discount "${rawDiscountCode}" (${amountK}K) KHÔNG CÓ mapping cho site ${siteId}`);
+                    discountWarning = `Mã "${rawDiscountCode}" (${amountK}K) không có trên GP cho cơ sở này (site ${siteId}). HĐ sẽ có nợ.`;
+                    discountCode = '';
+                }
+            } else if (discountCode) {
+                // Mã đã có suffix đúng site → gửi thẳng
+                const currentSuffix2 = SITE_SUFFIX[siteId] || '';
+                if (currentSuffix2 && discountCode.includes(currentSuffix2)) {
+                    console.log(`[GP-v2] GP code already correct site: "${discountCode}" (site ${siteId})`);
+                } else {
+                    // Thử tra FIXED_DISCOUNT_MAP xem mã có exact match không
+                    const siteMap = FIXED_DISCOUNT_MAP[siteId] || {};
+                    const isKnownCode = Object.values(siteMap).includes(discountCode);
+                    if (isKnownCode) {
+                        console.log(`[GP-v2] ✅ Known GP code: "${discountCode}" (site ${siteId})`);
+                    } else {
+                        console.warn(`[GP-v2] ⚠️ Discount code "${discountCode}" không nhận dạng được → gửi thẳng thử`);
+                        // KHÔNG DROP — gửi thẳng, để GP tự validate
+                    }
+                }
+            }
         }
-        const paidAmount = parseInt(paymentInfo?.pay_amount || paymentInfo?.total_amount) || 0;
+        const totalAmount = parseInt(paymentInfo?.total_amount) || 0;
+        let paidAmount = parseInt(paymentInfo?.pay_amount || paymentInfo?.total_amount) || 0;
         const payMethod = paymentInfo?.pay_method || 'CASH';
+
+        // ✅ TRIỆT ĐỂ: LUÔN gửi pay_amount >= giá gốc gói GP → KHÔNG BAO GIỜ ghi nợ
+        // GP tự cap pay ở mức total_amount (sau discount) → thừa tiền cũng OK
+        // Discount code vẫn gửi kèm → GP tự áp dụng
+        const safePayAmount = Math.max(totalAmount, paidAmount, 10000000);
+        if (safePayAmount !== paidAmount) {
+            console.warn(`[GP-v2] ⚠️ pay_amount (${paidAmount}) → ép lên ${safePayAmount} để TRÁNH NỢ (discount: "${discountCode}")`);
+        }
+        paidAmount = safePayAmount;
 
         const extPayload = {
             user_id: userId,
@@ -368,6 +683,32 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
             console.log(`[GP-v2] Discount code: "${discountCode}"`);
         }
 
+        // === Step 1: Tạo lead trước (GP API yêu cầu có lead trước khi tạo subscribe) ===
+        try {
+            const leadPayload = {
+                user_id: userId,
+                name: (personInfo.fullname || '').toUpperCase(),
+                phone: phone,
+                gender: personInfo.gender === 2 ? 0 : (personInfo.gender || 1),
+                site_id: siteId,
+                source: 'FACE'
+            };
+            console.log(`[GP-v2] Creating lead for ${phone}...`);
+            const leadRes = await fetch(`${GP_EXT}/leads`, {
+                method: 'POST', headers,
+                body: JSON.stringify(leadPayload)
+            });
+            const leadData = await leadRes.json();
+            if (leadData.success) {
+                console.log(`[GP-v2] ✅ Lead created: #${leadData.data?.lead_id}`);
+            } else {
+                console.log(`[GP-v2] Lead exists or skipped: ${leadData.message || JSON.stringify(leadData.errors || {})}`);
+            }
+        } catch (leadErr) {
+            console.warn(`[GP-v2] ⚠️ Lead creation error (non-blocking): ${leadErr.message}`);
+        }
+
+        // === Step 2: Tạo subscribe ===
         console.log(`[GP-v2] POST /subscribes:`, JSON.stringify(extPayload));
         const subRes = await fetch(`${GP_EXT}/subscribes`, {
             method: 'POST', headers,
@@ -385,6 +726,37 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
         if (subId) {
             console.log(`[GP-v2] ✅ Subscribe created: #${subId}, person: #${personId}`);
             console.log(`[GP-v2] Total: ${subData?.data?.total_amount}, Paid: ${subData?.data?.pay_amount}, Remain: ${subData?.data?.remain_amount}`);
+
+            // === AUTO-FIX NỢ: Nếu GP trả remain_amount > 0, tự thanh toán bổ sung ===
+            const remainAmount = parseInt(subData?.data?.remain_amount) || 0;
+            if (remainAmount > 0) {
+                console.warn(`[GP-v2] ⚠️ GP ghi nợ ${remainAmount}đ cho subscribe #${subId} → tự thanh toán bổ sung`);
+                try {
+                    const GP_BASE = 'https://quanly.greenpool.vn/api';
+                    const adminLoginRes2 = await fetch(`${GP_BASE}/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                        body: JSON.stringify({ phone: '0332143334', password: '123456a@' })
+                    });
+                    const adminLoginData2 = await adminLoginRes2.json();
+                    const adminToken2 = adminLoginData2?.authorisation?.token;
+                    if (adminToken2) {
+                        const payDebtRes = await fetch(`${GP_BASE}/admin/subscribe/${subId}/payment`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${adminToken2}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify({ amount: remainAmount, pay_method: payMethod || 'cash', note: 'Auto-fix nợ từ TLSC App' })
+                        });
+                        const payDebtData = await payDebtRes.json();
+                        if (payDebtRes.ok) {
+                            console.log(`[GP-v2] ✅ Auto-fix nợ thành công: +${remainAmount}đ cho GP#${subId}`);
+                        } else {
+                            console.warn(`[GP-v2] ⚠️ Auto-fix nợ response: ${JSON.stringify(payDebtData)}`);
+                        }
+                    }
+                } catch (debtErr) {
+                    console.warn(`[GP-v2] ⚠️ Auto-fix nợ error (non-blocking): ${debtErr.message}`);
+                }
+            }
 
             // === Check name mismatch: create member if phone belongs to parent ===
             if (personId) {
@@ -501,12 +873,19 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
                     const batch = db.batch();
                     studentDocs.docs.forEach(doc => {
                         if (!doc.data().gpSubscribeId) {
-                            batch.update(doc.ref, {
+                            const updateData = {
                                 gpSynced: true,
                                 gpSubscribeId: subId,
                                 gpPersonId: personId || null,
-                                gpSyncedAt: FieldValue.serverTimestamp()
-                            });
+                                gpSyncedAt: FieldValue.serverTimestamp(),
+                                gpSaleMatchMethod: saleMatchMethod || ''
+                            };
+                            // Ghi warning nếu dùng fallback
+                            if (usedFallback) {
+                                updateData.gpSaleWarning = `⚠️ Không tìm được Sale "${saleInfo.name || ''}" (${saleInfo.phone || ''}) trên GP → dùng user mặc định site ${siteId} (ID:${userId})`;
+                                updateData.gpSaleWarningAt = FieldValue.serverTimestamp();
+                            }
+                            batch.update(doc.ref, updateData);
                         }
                     });
                     await batch.commit();
@@ -515,7 +894,7 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
                     console.warn(`[GP-v2] ⚠️ Auto-save failed: ${saveErr.message}`);
                 }
             }
-            return { success: true, subscribeId: subId, personId: personId, discountWarning: discountWarning || undefined };
+            return { success: true, subscribeId: subId, personId: personId, discountWarning: discountWarning || undefined, saleMatchMethod: saleMatchMethod || undefined };
         }
 
         // ========== LỖI ==========
@@ -527,7 +906,185 @@ exports.gpCreateSubscribe = onCall({ maxInstances: 10 }, async (request) => {
         // Gửi thông báo cho Admin
         await notifyAdminSyncError('', '', 'Exception: ' + err.message);
         throw new HttpsError("internal", err.message);
+    } finally {
+        // ========== CLEANUP LOCK ==========
+        if (lockAcquired) {
+            try {
+                await lockRef.delete();
+                console.log(`[GP-v2] 🔓 Lock released: ${lockId}`);
+            } catch (e) { /* ignore */ }
+        }
     }
+});
+
+// ============ FIX SALE NAMES: Sửa tên Sale sai trên GP cho các HĐ từ 13/8 ============ //
+// Admin-only: Tìm các HĐ đã sync GP trong khoảng thời gian bị lỗi, sửa support_user cho đúng
+exports.gpFixSaleNames = onCall({ maxInstances: 1, timeoutSeconds: 300 }, async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Chưa đăng nhập.");
+    
+    // Kiểm tra caller là ADMIN
+    const callerDoc = await db.collection('users').doc(request.auth.uid).get();
+    if (!callerDoc.exists || callerDoc.data().role !== 'ADMIN') {
+        throw new HttpsError("permission-denied", "Chỉ Admin mới được dùng.");
+    }
+
+    const { fromDate, toDate, dryRun } = request.data || {};
+    // Default: 13/8/2026 14:00 → now
+    const from = fromDate ? new Date(fromDate) : new Date('2026-08-13T07:00:00Z'); // 14:00 VN = 07:00 UTC
+    const to = toDate ? new Date(toDate) : new Date();
+    const isDryRun = dryRun !== false; // Mặc định dry-run = true (chỉ check, chưa fix)
+
+    console.log(`[GP-Fix] ${isDryRun ? '🔍 DRY RUN' : '🔧 FIX MODE'}: from=${from.toISOString()} to=${to.toISOString()}`);
+
+    // Tìm tất cả students đã sync GP trong khoảng thời gian bị lỗi
+    const snap = await db.collection('students')
+        .where('gpSynced', '==', true)
+        .where('gpSyncedAt', '>=', from)
+        .where('gpSyncedAt', '<=', to)
+        .get();
+
+    if (snap.empty) {
+        return { success: true, message: 'Không có HĐ nào trong khoảng thời gian này', total: 0 };
+    }
+
+    console.log(`[GP-Fix] Found ${snap.size} students synced in range`);
+
+    // Load sale info cho tất cả creatorIds
+    const creatorIds = [...new Set(snap.docs.map(d => d.data().creatorId || d.data().saleId).filter(Boolean))];
+    const saleMap = {};
+    for (const cid of creatorIds) {
+        try {
+            const uDoc = await db.collection('users').doc(cid).get();
+            if (uDoc.exists) {
+                const u = uDoc.data();
+                saleMap[cid] = { name: u.name || '', phone: u.phone || u.phoneNumber || '' };
+            }
+        } catch (e) { /* skip */ }
+    }
+    console.log(`[GP-Fix] Loaded ${Object.keys(saleMap).length} sale users from Firestore`);
+
+    // Login GP admin
+    const token = await gpAdminLogin();
+    if (!token) {
+        return { success: false, message: 'Không login được GP Admin API' };
+    }
+
+    const SITE_MAP = {
+        'branch_nguyen_co_thach': 1,
+        'branch_cung_ttdn': 2,
+        'branch_thuy_khue': 3,
+        'branch_hoang_mai': 4,
+        'branch_thanh_tri': 5
+    };
+
+    const results = [];
+    let fixed = 0, skipped = 0, errors = 0;
+
+    for (const doc of snap.docs) {
+        const s = doc.data();
+        const gpSubId = s.gpSubscribeId;
+        if (!gpSubId || gpSubId === 'existed') { skipped++; continue; }
+
+        const creatorId = s.creatorId || s.saleId || '';
+        const originalSale = saleMap[creatorId] || null;
+        if (!originalSale) {
+            results.push({ contract: s.contractNumber, status: 'skip', reason: 'no_creator', creatorId });
+            skipped++;
+            continue;
+        }
+
+        const siteId = SITE_MAP[s.branchId] || 2;
+
+        // Tìm Sale đúng trên GP
+        let gpSale = null;
+        try {
+            gpSale = await findSaleOnGP(originalSale, siteId);
+        } catch (e) {
+            results.push({ contract: s.contractNumber, status: 'error', reason: `findSale error: ${e.message}` });
+            errors++;
+            continue;
+        }
+
+        if (!gpSale) {
+            results.push({ contract: s.contractNumber, status: 'skip', reason: `no_gp_sale for "${originalSale.name}" (${originalSale.phone})`, siteId });
+            skipped++;
+            continue;
+        }
+
+        // Lấy thông tin subscribe hiện tại từ GP
+        let currentSupportUserId = null;
+        try {
+            const subRes = await fetch(`${GP_BASE_URL}/admin/subscribe/${gpSubId}`, {
+                headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
+            });
+            const subData = await subRes.json();
+            currentSupportUserId = subData?.support_user_id || subData?.data?.support_user_id || null;
+        } catch (e) {
+            results.push({ contract: s.contractNumber, gpSubId, status: 'error', reason: `get subscribe error: ${e.message}` });
+            errors++;
+            continue;
+        }
+
+        // So sánh: nếu Sale đã đúng → skip
+        if (currentSupportUserId && String(currentSupportUserId) === String(gpSale.id)) {
+            results.push({ contract: s.contractNumber, gpSubId, status: 'ok', currentSale: gpSale.fullname });
+            skipped++;
+            continue;
+        }
+
+        const entry = {
+            contract: s.contractNumber,
+            gpSubId,
+            student: s.name,
+            originalSale: originalSale.name,
+            currentGpSaleId: currentSupportUserId,
+            correctGpSaleId: gpSale.id,
+            correctGpSaleName: gpSale.fullname,
+            siteId
+        };
+
+        if (isDryRun) {
+            entry.status = 'would_fix';
+            results.push(entry);
+            fixed++;
+            continue;
+        }
+
+        // FIX: Update support_user_id trên GP
+        try {
+            const updateRes = await fetch(`${GP_BASE_URL}/admin/subscribe/${gpSubId}`, {
+                method: 'PUT',
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ support_user_id: gpSale.id })
+            });
+            const updateData = await updateRes.json();
+            if (updateRes.ok) {
+                entry.status = 'fixed';
+                // Cập nhật Firestore
+                await doc.ref.update({
+                    gpSaleMatchMethod: `fix: "${gpSale.fullname}" (ID:${gpSale.id})`,
+                    gpSaleWarning: FieldValue.delete(),
+                    gpSaleWarningAt: FieldValue.delete(),
+                    gpSaleFixedAt: FieldValue.serverTimestamp()
+                });
+                fixed++;
+            } else {
+                entry.status = 'error';
+                entry.reason = `PUT failed: ${JSON.stringify(updateData).substring(0, 200)}`;
+                errors++;
+            }
+        } catch (e) {
+            entry.status = 'error';
+            entry.reason = `PUT exception: ${e.message}`;
+            errors++;
+        }
+        results.push(entry);
+    }
+
+    const summary = `${isDryRun ? '🔍 DRY RUN' : '🔧 FIXED'}: ${fixed} fix, ${skipped} skip, ${errors} error (total: ${snap.size})`;
+    console.log(`[GP-Fix] ${summary}`);
+
+    return { success: true, message: summary, total: snap.size, fixed, skipped, errors, results };
 });
 
 // Helper: Gửi thông báo lỗi sync GP cho tất cả Admin
@@ -568,7 +1125,7 @@ const backupClient = new firestoreAdmin.v1.FirestoreAdminClient();
 
 exports.scheduledFirestoreBackup = onSchedule(
     {
-        schedule: "0 19 * * *",   // 19:00 UTC = 2:00 AM Vietnam (UTC+7)
+        schedule: "0 19 * * 0",   // 19:00 UTC = 2:00 AM Vietnam (UTC+7)
         timeZone: "Asia/Ho_Chi_Minh",
         region: "asia-southeast1",
         retryCount: 2,
@@ -577,7 +1134,7 @@ exports.scheduledFirestoreBackup = onSchedule(
         const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "thang-long-swimming-club";
         const databaseName = backupClient.databasePath(projectId, "(default)");
         const bucket = `gs://${projectId}-firestore-backups`;
-        const timestamp = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-"); // YYYY-MM-DDTHH-MM-SS-mmmZ
 
         console.log(`🔄 Bắt đầu backup Firestore → ${bucket}/${timestamp}`);
 
@@ -585,7 +1142,7 @@ exports.scheduledFirestoreBackup = onSchedule(
             const [response] = await backupClient.exportDocuments({
                 name: databaseName,
                 outputUriPrefix: `${bucket}/${timestamp}`,
-                collectionIds: [], // [] = tất cả collections
+                collectionIds: ['students', 'athletes', 'users', 'attendance', 'clb_attendance', 'queues', 'settings', 'config', 'branches'],
             });
             console.log(`✅ Backup thành công: ${response.name}`);
 
@@ -598,6 +1155,7 @@ exports.scheduledFirestoreBackup = onSchedule(
                     batch.set(notifRef, {
                         toUserId: adminDoc.id,
                         type: "system",
+                        fcmTokens: adminDoc.data()?.fcmTokens || [],
                         message: `✅ Backup Firestore thành công!\n📅 ${timestamp}\n📦 ${bucket}/${timestamp}`,
                         read: false,
                         createdAt: FieldValue.serverTimestamp(),
@@ -618,6 +1176,7 @@ exports.scheduledFirestoreBackup = onSchedule(
                     batch.set(notifRef, {
                         toUserId: adminDoc.id,
                         type: "system",
+                        fcmTokens: adminDoc.data()?.fcmTokens || [],
                         message: `❌ Backup Firestore THẤT BẠI!\n📅 ${timestamp}\n🔴 Lỗi: ${err.message}`,
                         read: false,
                         createdAt: FieldValue.serverTimestamp(),
@@ -658,6 +1217,7 @@ exports.manualFirestoreBackup = onCall({ region: "asia-southeast1" }, async (req
 // ============ FIX GP PAYMENT (TẠM - XÓA SAU KHI CHẠY) ============ //
 // mode='preview' → CHỈ ĐỌC (mặc định)
 // mode='fix'     → XÓA subscribe cũ + TẠO LẠI mới bằng TK Sale
+/* DISABLED - temp fix function, removed for cost optimization
 exports.gpFixTodayPayments = onCall({ maxInstances: 1, timeoutSeconds: 540 }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Chưa đăng nhập.");
     const callerDoc = await db.collection("users").doc(request.auth.uid).get();
@@ -879,8 +1439,10 @@ exports.gpFixTodayPayments = onCall({ maxInstances: 1, timeoutSeconds: 540 }, as
     const fixed = results.filter(r => r.status === 'FIXED').length;
     return { mode, total: docs.length, needFix, fixed, results };
 });
+*/
 
 // ===== TẠM: HTTP endpoint để gọi fix trực tiếp bằng curl (XÓA SAU KHI DÙNG) =====
+/* DISABLED - temp fix function, removed for cost optimization
 exports.gpFixHttp = onRequest({ maxInstances: 1, timeoutSeconds: 540 }, async (req, res) => {
     const SECRET = 'fix-gp-2026-06-12';
     if (req.query.key !== SECRET && req.body?.key !== SECRET) {
@@ -1117,6 +1679,7 @@ exports.gpFixHttp = onRequest({ maxInstances: 1, timeoutSeconds: 540 }, async (r
     const fixed = results.filter(r => r.status === 'FIXED').length;
     res.json({ mode, total: docs.length, needFix, fixed, results });
 });
+*/
 
 // ============ ĐỒNG BỘ MÃ GIẢM GIÁ TỪ GP → FIRESTORE ============ //
 // Login từng site account → GET /admin/discount → lọc gói HB → lưu Firestore
